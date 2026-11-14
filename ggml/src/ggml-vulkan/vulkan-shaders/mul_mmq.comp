@@ -7,6 +7,7 @@
 #extension GL_EXT_integer_dot_product : require
 
 #define KVALUES_IQ4NL_I8
+#define NEEDS_IQ1S_GRID_GPU
 
 #ifdef FLOAT16
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
