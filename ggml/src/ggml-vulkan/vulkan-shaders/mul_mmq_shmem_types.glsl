@@ -71,6 +71,24 @@ struct block_a_cache {
     int32_t qs[8];
     FLOAT_TYPE d;
 };
+#elif defined(DATA_A_IQ2_S)
+#define QUANT_R_MMQ 2
+struct block_a_cache {
+    int32_t qs[8];
+    FLOAT_TYPEV2 d_scales; // one scale per 16 values
+};
+#elif defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ3_XXS)
+#define QUANT_R_MMQ 2
+struct block_a_cache {
+    int32_t qs[8];
+    FLOAT_TYPE d;
+};
+#elif defined(DATA_A_IQ2_XS)
+#define QUANT_R_MMQ 2
+struct block_a_cache {
+    int32_t qs[8];
+    FLOAT_TYPEV2 d_scales; // one scale per 16 values
+};
 #elif defined(DATA_A_Q2_K)
 #define QUANT_R_MMQ 4
 struct block_a_cache {
