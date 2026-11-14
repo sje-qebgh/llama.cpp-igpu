@@ -3948,6 +3948,31 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
 
             const uint32_t cols_per_wg = gdn_subgroup_size / lanes_per_column;
+
+            // Intel: share k/q of each token between subgroups of one workgroup
+            uint32_t gdn_nsg = 1;
+            if (device->vendor_id == VK_VENDOR_ID_INTEL && use_subgroup_ops &&
+                (device->subgroup_size_control || gdn_subgroup_size == device->subgroup_size)) {
+                gdn_nsg = 16;
+                while (gdn_nsg > 1 && (S_V % (cols_per_wg * gdn_nsg) != 0 ||
+                                       gdn_subgroup_size * gdn_nsg > device->properties.limits.maxComputeWorkGroupSize[0] ||
+                                       gdn_subgroup_size * gdn_nsg > device->properties.limits.maxComputeWorkGroupInvocations)) {
+                    gdn_nsg >>= 1;
+                }
+            }
+
+            if (gdn_nsg > 1) {
+                const std::array<uint32_t, 3> wg_denoms = {1u, 1u, cols_per_wg * gdn_nsg};
+                const size_t skq_len = use_clustered_reduce ? gated_delta_net_skq_f32_len : gated_delta_net_skq_f32_nocluster_len;
+                const void * skq_data = use_clustered_reduce ? (const void *)gated_delta_net_skq_f32_data : (const void *)gated_delta_net_skq_f32_nocluster_data;
+                for (uint32_t kda = 0; kda < 2; kda++) {
+                    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
+                        gdn_names[si][kda], skq_len, skq_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
+                        wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column, gdn_nsg, gdn_subgroup_size * gdn_nsg}, 1, true, true, gdn_subgroup_size);
+                }
+                continue;
+            }
+
             const std::array<uint32_t, 3> wg_denoms = {1u, 1u, cols_per_wg};
 
             for (uint32_t kda = 0; kda < 2; kda++) {
