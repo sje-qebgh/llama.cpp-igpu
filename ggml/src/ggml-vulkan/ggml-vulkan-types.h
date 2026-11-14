@@ -746,6 +746,22 @@ struct vk_device_struct {
     bool integer_dot_product;
     // 0: default, 1: force mmvq, -1: disable mmvq
     int32_t mmvq_mode;
+    // GGML_VK_XE2_MMVQ_LEGACY: use the pre-patch Xe2 MMVQ selection (Q2/Q3/Q6 only on Windows)
+    bool mmvq_xe2_legacy;
+    // Xe2 + Intel Windows driver: use the tuned MMVQ launch shapes (off with GGML_VK_XE2_MMVQ_LEGACY)
+    bool mmvq_xe2_tuned;
+    // GGML_VK_MMVQ_DEBUG: log once per (op, type, shape) whether a mat-vec took the MMVQ path
+    bool mmvq_debug;
+    // Experimental MMVQ launch-shape overrides (q8_1 mat-vec pipelines), parsed from env at device init:
+    //   GGML_VK_MMVQ_ROWS / GGML_VK_MMVQ_ID_ROWS : rows per workgroup, e.g. "4" or "q3_K=4,q2_K=2"
+    //   GGML_VK_MMVQ_WG   / GGML_VK_MMVQ_ID_WG   : workgroup size, "subgroup" or "large", same syntax
+    //   GGML_VK_MMVQ_SG                          : subgroup size for the q8_1 pipelines (Intel), e.g. 16 or 32
+    // 0 means "no override".
+    uint8_t mmvq_rows_ovr[GGML_TYPE_COUNT];
+    uint8_t mmvq_id_rows_ovr[GGML_TYPE_COUNT];
+    uint8_t mmvq_wg_ovr[GGML_TYPE_COUNT];     // 0 none, 1 subgroup, 2 large
+    uint8_t mmvq_id_wg_ovr[GGML_TYPE_COUNT];
+    uint32_t mmvq_sg_ovr;
 
     bool subgroup_size_control;
     uint32_t subgroup_min_size;
