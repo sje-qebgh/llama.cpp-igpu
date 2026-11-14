@@ -914,6 +914,102 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 }
 #endif
 
+#if defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M)
+// The grid holds g + 1 (g in {-1, 0, 1}) in 4-bit fields and delta is +-1/8, so 8 * (g + delta)
+// = 8 * nibble - 8 + sign is an exact int8. Returns values 0..3 in .x and 4..7 in .y.
+i32vec2 iq1_grid_to_i8x8(const uint grid, const int sign) {
+    const ivec4 lo = ivec4(unpack8((grid     ) & 0x0F0F0F0Fu));
+    const ivec4 hi = ivec4(unpack8((grid >> 4) & 0x0F0F0F0Fu));
+    return i32vec2(pack32(i8vec4(8 * lo - 8 + sign)), pack32(i8vec4(8 * hi - 8 + sign)));
+}
+
+// Each iqs handles one group of 8 values
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const bool is_in_bounds) {
+    if (is_in_bounds) {
+        const uint ib_k = ib / 8;
+        const uint ib32 = ib % 8;
+        const uint qs = (uint(data_a_packed16[ib_k].qs[2 * ib32 + iqs / 2]) >> ((iqs & 1) * 8)) & 0xFF;
+
+#if defined(DATA_A_IQ1_S)
+        // per 32 values: 4x3 high index bits, 3-bit scale, delta sign
+        const uint qh = uint(data_a[ib_k].qh[ib32]);
+        const uint idx = qs | (bitfieldExtract(qh, 3 * int(iqs), 3) << 8);
+        const int sign = (qh & 0x8000) != 0 ? -1 : 1;
+#else
+        // per 8 values: 3 high index bits and a delta sign bit
+        const uint qh = (uint(data_a_packed16[ib_k].qh[ib32]) >> (4 * iqs)) & 0xF;
+        const uint idx = qs | ((qh & 7) << 8);
+        const int sign = (qh & 8) != 0 ? -1 : 1;
+#endif
+
+        const i32vec2 q = iq1_grid_to_i8x8(iq1s_grid_gpu[idx], sign);
+        buf_a[buf_ib].qs[2 * iqs    ] = q.x;
+        buf_a[buf_ib].qs[2 * iqs + 1] = q.y;
+
+        if (iqs == 0) {
+#if defined(DATA_A_IQ1_S)
+            const float dl = float(data_a[ib_k].d) * float(2 * bitfieldExtract(qh, 12, 3) + 1);
+            buf_a[buf_ib].d = FLOAT_TYPE(dl * 0.125f);
+#else
+            // fp16 d is spread over the top 4 bits of the 4 scale words
+            const u16vec4 s = u16vec4(data_a[ib_k].scales[0], data_a[ib_k].scales[1], data_a[ib_k].scales[2], data_a[ib_k].scales[3]) >> 12;
+            const float d = unpackHalf2x16(s.x | (s.y << 4) | (s.z << 8) | (s.w << 12)).x * 0.125f;
+            const uint sc = uint(data_a[ib_k].scales[ib32 / 2]);
+            const uint ib16 = (2 * ib32) & 3;
+            buf_a[buf_ib].d_scales = FLOAT_TYPEV2(d * float(2 * bitfieldExtract(sc, 3 * int(ib16    ), 3) + 1),
+                                                  d * float(2 * bitfieldExtract(sc, 3 * int(ib16 + 1), 3) + 1));
+#endif
+        }
+    } else {
+        buf_a[buf_ib].qs[2 * iqs] = 0;
+        buf_a[buf_ib].qs[2 * iqs + 1] = 0;
+
+        if (iqs == 0) {
+#if defined(DATA_A_IQ1_S)
+            buf_a[buf_ib].d = FLOAT_TYPE(0.0f);
+#else
+            buf_a[buf_ib].d_scales = FLOAT_TYPEV2(0.0f);
+#endif
+        }
+    }
+}
+
+void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
+#if defined(DATA_A_IQ1_S)
+    cache_a[reg_ib].d = buf_a[buf_ib].d;
+#else
+    cache_a[reg_ib].d_scales = buf_a[buf_ib].d_scales;
+#endif
+
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
+    }
+}
+
+ACC_TYPE mmq_dot_product(const uint ib_a) {
+#if defined(DATA_A_IQ1_S)
+    int32_t q_sum = 0;
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        q_sum += dotPacked4x8EXT(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+    }
+
+    return ACC_TYPE(float(cache_a[ib_a].d) * float(cache_b.ds.x) * float(q_sum));
+#else
+    int32_t q_sum0 = 0;
+    int32_t q_sum1 = 0;
+    [[unroll]] for (uint iqs = 0; iqs < 4; iqs++) {
+        q_sum0 += dotPacked4x8EXT(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+    }
+    [[unroll]] for (uint iqs = 4; iqs < 8; iqs++) {
+        q_sum1 += dotPacked4x8EXT(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+    }
+
+    return ACC_TYPE(float(cache_b.ds.x) * (float(cache_a[ib_a].d_scales[0]) * float(q_sum0) +
+                                           float(cache_a[ib_a].d_scales[1]) * float(q_sum1)));
+#endif
+}
+#endif
+
 void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const bool is_in_bounds) {
     if (is_in_bounds) {
         const uint ib_outer = ib / 4;
