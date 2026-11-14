@@ -1,7 +1,7 @@
 # llama.cpp for integrated GPUs (Vulkan)
 
 A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) tuned for **integrated GPUs without
-matrix cores** (first target: Intel Meteor Lake / Arc Xe-LPG), with a focus on **low-bit quants (Q2-Q4, IQ\*)**
+matrix cores** (Intel Meteor Lake / Arc Xe-LPG; Lunar Lake / Xe2 for token generation), with a focus on **low-bit quants (Q2-Q4, IQ\*)**
 that people actually run on laptops: MoE models at 2-4 bits per weight.
 
 Everything here is in the Vulkan backend. Other backends are untouched.
@@ -14,6 +14,8 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, IQ4_NL | integer dot MMQ shaders (upstream only had them on coopmat GPUs) | measured |
 | Prefill, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot MMQ shaders | tests pass, not benchmarked yet |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
+| Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
+| Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
 
@@ -27,7 +29,23 @@ Intel Core Ultra (Meteor Lake), Arc iGPU, DDR5-5600 x2, Windows, `-ngl 99`.
 | Gemma-4 26B-A4B UD-IQ4_NL | pp512, `-ub 512` | 69.0 t/s | 90.9 t/s |
 | Gemma-4 26B-A4B UD-IQ4_NL | pp2048, `-ub 2048` | 80.4 t/s | 101.4 t/s |
 
-Token generation speed is unchanged so far.
+Intel Core Ultra (Lunar Lake), Arc 140V, LPDDR5X, Windows, `llama-bench` defaults.
+
+| Model | Test | Upstream | This fork |
+|---|---|---|---|
+| Qwen3.6-35B-A3B UD-IQ3_S | tg128 | 22.6 t/s | 25.5 t/s |
+| Qwen3.6-35B-A3B UD-IQ3_S | pp512 | 573.9-592.8 t/s | 613.3-618.4 t/s |
+
+Token generation on Meteor Lake is not measured yet.
+
+### Knobs for experiments (Vulkan, MMVQ)
+
+- `GGML_VK_FORCE_MMVQ=1` / `GGML_VK_DISABLE_MMVQ=1`: always / never use the integer dot mat-vec path
+- `GGML_VK_XE2_MMVQ_LEGACY=1`: upstream MMVQ selection and launch shapes on Xe2
+- `GGML_VK_MMVQ_ROWS`, `GGML_VK_MMVQ_ID_ROWS`: rows per workgroup, e.g. `4` or `q3_K=4,iq3_s=16`
+- `GGML_VK_MMVQ_WG`, `GGML_VK_MMVQ_ID_WG`: `subgroup` or `large`, same syntax
+- `GGML_VK_MMVQ_SG`: subgroup size for the MMVQ pipelines (Intel), e.g. `16`
+- `GGML_VK_MMVQ_DEBUG=1`: log once per shape whether a mat-vec took the MMVQ path and why
 
 ## Recommended settings on iGPUs
 
@@ -53,8 +71,8 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 ## Roadmap
 
 - IQ3_S and K-quant MoE matmuls are about 2.7x slower than IQ4_NL on Meteor Lake; suspected register spills at SIMD16.
-- Token generation is far from memory bandwidth limits (about 1/3 of it). Profile, then add integer dot mat-vec shaders
-  for IQ2_*/IQ3_*/IQ4_NL or reduce dispatch overhead.
+- Token generation is still far from memory bandwidth limits. Next: MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS,
+  check MMVQ on Meteor Lake (`GGML_VK_FORCE_MMVQ=1`), then dispatch overhead.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path, which upstream enables only on AMD.
 
 ## Keeping up with upstream
