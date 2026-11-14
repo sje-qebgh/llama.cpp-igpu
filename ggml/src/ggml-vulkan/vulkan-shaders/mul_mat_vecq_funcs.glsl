@@ -470,6 +470,93 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
 }
 #endif
 
+#if defined(DATA_A_IQ4_NL)
+// One 32-quant block per call. IQ4_NL blocks are 18 bytes (2-byte aligned), so load 2 bytes at a time.
+// Byte j holds quant j in the low nibble and quant j+16 in the high nibble.
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    int32_t q_sum = 0;
+    [[unroll]] for (uint j = 0; j < 4; ++j) {
+        const uint32_t vui = pack32(u16vec2(data_a_packed16[ib_a].qs[2 * j    ],
+                                            data_a_packed16[ib_a].qs[2 * j + 1]));
+        const i32vec2 qs_a = iq4nl_to_i8x8(vui);
+
+        q_sum += dotPacked4x8EXT(qs_a.x, cache_b_qs[j]);
+        q_sum += dotPacked4x8EXT(qs_a.y, cache_b_qs[j + 4]);
+    }
+
+    return FLOAT_TYPE(float(cache_b_ds.x) * float(data_a_packed16[ib_a].d) * float(q_sum));
+}
+#endif
+
+#if defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_S)
+// Negate the bytes of a packed grid word selected by a 4-bit sign mask (bit i -> byte i).
+// Grid magnitudes are never zero, so the per-byte two's complement cannot carry into the next byte.
+int32_t iq_apply_signs(const uint32_t grid, const uint signs4) {
+    const uint32_t lsb = (signs4 * 0x00204081u) & 0x01010101u;
+    return int32_t((grid ^ (lsb * 0xFFu)) + lsb);
+}
+#endif
+
+#if defined(DATA_A_IQ2_S)
+// One 32-quant sub-block per call: 4 grid entries of 8 magnitudes each, sign bytes stored after
+// the 32 grid index bytes, 2 extra index bits per entry in qh, one 4-bit scale per 16 quants.
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const uint ib_k = ib_a / 8;
+    const uint ib32 = ib_a % 8;
+
+    const uint32_t qs32 = pack32(u16vec2(data_a_packed16[ib_k].qs[2 * ib32],
+                                         data_a_packed16[ib_k].qs[2 * ib32 + 1]));
+    const uint32_t sg32 = pack32(u16vec2(data_a_packed16[ib_k].qs[QUANT_K / 16 + 2 * ib32],
+                                         data_a_packed16[ib_k].qs[QUANT_K / 16 + 2 * ib32 + 1]));
+    const uint qh = data_a[ib_k].qh[ib32];
+    const uint scales = data_a[ib_k].scales[ib32];
+
+    int32_t q_sum[2] = int32_t[2](0, 0);
+    [[unroll]] for (uint l = 0; l < 4; ++l) {
+        const uint idx = ((qs32 >> (8 * l)) & 0xFFu) | (((qh >> (2 * l)) & 3u) << 8);
+        const uint sign = (sg32 >> (8 * l)) & 0xFFu;
+        const uvec2 grid = iq2s_grid[idx];
+
+        q_sum[l / 2] += dotPacked4x8EXT(iq_apply_signs(grid.x, sign & 0xFu), cache_b_qs[2 * l    ]);
+        q_sum[l / 2] += dotPacked4x8EXT(iq_apply_signs(grid.y, sign >> 4),   cache_b_qs[2 * l + 1]);
+    }
+
+    // db = d * (0.5 + scale) * 0.25 = d * (2 * scale + 1) * 0.125
+    const int32_t sum = int32_t(2 * (scales & 0xFu) + 1) * q_sum[0] + int32_t(2 * (scales >> 4) + 1) * q_sum[1];
+
+    return FLOAT_TYPE(float(cache_b_ds.x) * float(data_a[ib_k].d) * 0.125f * float(sum));
+}
+#endif
+
+#if defined(DATA_A_IQ3_S)
+// One 32-quant sub-block per call: 8 grid entries of 4 magnitudes each (9-bit index, high bit in qh),
+// one sign bit per quant, one 4-bit scale per 32 quants.
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const uint ib_k = ib_a / 8;
+    const uint ib32 = ib_a % 8;
+
+    const uint32_t qs_lo = pack32(u16vec2(data_a_packed16[ib_k].qs[4 * ib32    ],
+                                          data_a_packed16[ib_k].qs[4 * ib32 + 1]));
+    const uint32_t qs_hi = pack32(u16vec2(data_a_packed16[ib_k].qs[4 * ib32 + 2],
+                                          data_a_packed16[ib_k].qs[4 * ib32 + 3]));
+    const uint32_t sg32  = pack32(u16vec2(data_a_packed16[ib_k].signs[2 * ib32    ],
+                                          data_a_packed16[ib_k].signs[2 * ib32 + 1]));
+    const uint qh = data_a[ib_k].qh[ib32];
+    const uint scale = (uint(data_a[ib_k].scales[ib32 / 2]) >> (4 * (ib32 & 1))) & 0xFu;
+
+    int32_t q_sum = 0;
+    [[unroll]] for (uint m = 0; m < 4; ++m) {
+        const uint idx0 = ((qs_lo >> (8 * m)) & 0xFFu) | (((qh >> m)       & 1u) << 8);
+        const uint idx1 = ((qs_hi >> (8 * m)) & 0xFFu) | (((qh >> (m + 4)) & 1u) << 8);
+
+        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3s_grid[idx0], (sg32 >> (4 * m))      & 0xFu), cache_b_qs[m]);
+        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3s_grid[idx1], (sg32 >> (4 * m + 16)) & 0xFu), cache_b_qs[m + 4]);
+    }
+
+    return FLOAT_TYPE(float(cache_b_ds.x) * float(data_a[ib_k].d) * float(int32_t(2 * scale + 1) * q_sum));
+}
+#endif
+
 #if defined(DATA_A_IQ1_S)
 void repack8(uint ib, uint iqs, out i32vec4 out0, out i32vec4 out1) {
     const uint ib32 = iqs / 32;
