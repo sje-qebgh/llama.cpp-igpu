@@ -13,6 +13,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, IQ2_S | integer dot (q8_1) MMQ shaders for mul_mat and mul_mat_id | measured |
 | Prefill, IQ4_NL | integer dot MMQ shaders (upstream only had them on coopmat GPUs) | measured |
 | Prefill, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot MMQ shaders | tests pass, not benchmarked yet |
+| Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass, not benchmarked yet |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup | measured on Lunar Lake |
@@ -60,8 +61,8 @@ and each check was confirmed to fail when the shader is deliberately broken.
 Run them on your own GPU before trusting numbers:
 
 ```
-test-backend-ops -o MUL_MAT    -b Vulkan0 -p "type_a=iq(2_xxs|2_xs|2_s|3_xxs|4_nl)"
-test-backend-ops -o MUL_MAT_ID -b Vulkan0 -p "type_a=iq(2_xxs|2_xs|2_s|3_xxs|4_nl)"
+test-backend-ops -o MUL_MAT    -b Vulkan0 -p "type_a=iq(1_s|1_m|2_xxs|2_xs|2_s|3_xxs|4_nl)"
+test-backend-ops -o MUL_MAT_ID -b Vulkan0 -p "type_a=iq(1_s|1_m|2_xxs|2_xs|2_s|3_xxs|4_nl)"
 test-backend-ops -o GATED_DELTA_NET -b Vulkan0
 ```
 
