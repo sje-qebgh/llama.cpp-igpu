@@ -515,7 +515,7 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
     [[unroll]] for (uint l = 0; l < 4; ++l) {
         const uint idx = ((qs32 >> (8 * l)) & 0xFFu) | (((qh >> (2 * l)) & 3u) << 8);
         const uint sign = (sg32 >> (8 * l)) & 0xFFu;
-        const uvec2 grid = iq2s_grid[idx];
+        const uvec2 grid = iq2s_grid_get(idx);
 
         q_sum[l / 2] += dotPacked4x8EXT(iq_apply_signs(grid.x, sign & 0xFu), cache_b_qs[2 * l    ]);
         q_sum[l / 2] += dotPacked4x8EXT(iq_apply_signs(grid.y, sign >> 4),   cache_b_qs[2 * l + 1]);
@@ -549,8 +549,8 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
         const uint idx0 = ((qs_lo >> (8 * m)) & 0xFFu) | (((qh >> m)       & 1u) << 8);
         const uint idx1 = ((qs_hi >> (8 * m)) & 0xFFu) | (((qh >> (m + 4)) & 1u) << 8);
 
-        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3s_grid[idx0], (sg32 >> (4 * m))      & 0xFu), cache_b_qs[m]);
-        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3s_grid[idx1], (sg32 >> (4 * m + 16)) & 0xFu), cache_b_qs[m + 4]);
+        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3s_grid_get(idx0), (sg32 >> (4 * m))      & 0xFu), cache_b_qs[m]);
+        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3s_grid_get(idx1), (sg32 >> (4 * m + 16)) & 0xFu), cache_b_qs[m + 4]);
     }
 
     return FLOAT_TYPE(float(cache_b_ds.x) * float(data_a[ib_k].d) * float(int32_t(2 * scale + 1) * q_sum));
