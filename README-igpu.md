@@ -16,7 +16,8 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass, not benchmarked yet |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
-| Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup | measured on Lunar Lake |
+| Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (incl. 4 rows for dense Q6_K) | measured on Lunar Lake |
+| Token generation, IQ2_S / IQ3_S | grid tables bit-packed in shared memory for MMVQ (8 KiB -> 2 KiB, 2 KiB -> 1 KiB), cheaper per-workgroup copy | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
 
@@ -34,8 +35,11 @@ Intel Core Ultra (Lunar Lake), Arc 140V, LPDDR5X, Windows, `llama-bench` default
 
 | Model | Test | Upstream | This fork |
 |---|---|---|---|
-| Qwen3.6-35B-A3B UD-IQ3_S | tg128 | 22.6 t/s | 25.5 t/s |
+| Qwen3.6-35B-A3B UD-IQ3_S | tg128 | 23.8 t/s (23.4-24.0) | 28.5 t/s (28.0-28.7) |
 | Qwen3.6-35B-A3B UD-IQ3_S | pp512 | 573.9-592.8 t/s | 613.3-618.4 t/s |
+
+tg128: upstream 5a4afd8 vs this fork eaf44b1, 5 alternating runs each (`-p 0 -n 128 -r 3`), mean and range: +20%.
+pp512 was measured with an earlier build of this fork (before the MMVQ grid packing and Q6_K changes).
 
 Token generation on Meteor Lake is not measured yet.
 
