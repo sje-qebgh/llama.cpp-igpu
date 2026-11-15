@@ -36,3 +36,11 @@ layout (binding = 4) readonly buffer Fuse1 {D_TYPE data_fuse1[];};
 layout (binding = 5) readonly buffer IDS {int data_ids[];};
 #endif
 
+#ifdef IQ_GRID_BUFFER
+// IQ2_S: 1024 entries of 2 words, IQ3_S: 512 entries of 1 word (same layout as ggml-common.h)
+#ifdef MUL_MAT_ID
+layout (binding = 6) readonly buffer IQGrid {uint data_iq_grid[];};
+#else
+layout (binding = 5) readonly buffer IQGrid {uint data_iq_grid[];};
+#endif
+#endif
