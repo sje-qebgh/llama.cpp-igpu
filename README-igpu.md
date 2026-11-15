@@ -89,6 +89,7 @@ Token generation on Meteor Lake is not measured yet.
   Needs subgroup shuffle; lanes x values per lane must be a multiple of 32, other values are ignored.
 - `GGML_VK_MMVQ_SG`: subgroup size for the MMVQ pipelines (Intel), e.g. `16`
 - `GGML_VK_MMVQ_DEBUG=1`: log once per shape whether a mat-vec took the MMVQ path and why
+- `GGML_VK_MMVQ_IQ_SHMEM=1`: IQ2_S / IQ3_S MMVQ copy the (bit-packed) grid table into shared memory per workgroup instead of reading it from a storage buffer
 
 PowerShell keeps environment variables for the whole session: remove them (`Remove-Item Env:NAME`) before
 measuring a baseline.
