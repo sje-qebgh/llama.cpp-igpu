@@ -756,11 +756,14 @@ struct vk_device_struct {
     bool mmvq_xe2_tuned;
     // GGML_VK_MMVQ_DEBUG: log once per (op, type, shape) whether a mat-vec took the MMVQ path
     bool mmvq_debug;
-    // IQ2_S / IQ3_S MMVQ: grid tables in a storage buffer, bound as an extra binding, so workgroups do not
+    // IQ2/IQ3 MMVQ: grid tables in a storage buffer, bound as an extra binding, so workgroups do not
     // copy them into shared memory. GGML_VK_MMVQ_IQ_SHMEM=1 selects the shared memory variant instead.
     bool mmvq_iq_shmem;
     vk_buffer iq2s_grid_buf;
     vk_buffer iq3s_grid_buf;
+    vk_buffer iq2xxs_grid_buf;
+    vk_buffer iq2xs_grid_buf;
+    vk_buffer iq3xxs_grid_buf;
     // Experimental MMVQ launch-shape overrides (q8_1 mat-vec pipelines), parsed from env at device init:
     //   GGML_VK_MMVQ_ROWS / GGML_VK_MMVQ_ID_ROWS : rows per workgroup, e.g. "4" or "q3_K=4,q2_K=2"
     //   GGML_VK_MMVQ_WG   / GGML_VK_MMVQ_ID_WG   : workgroup size, "subgroup" or "large", same syntax
