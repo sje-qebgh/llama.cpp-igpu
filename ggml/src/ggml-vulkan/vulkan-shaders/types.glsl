@@ -990,6 +990,8 @@ void init_iq_shmem(uvec3 wgsize)
 shared uint32_t iq2s_grid_p[512];
 #elif defined(DATA_A_IQ2_S)
 shared uvec2 iq2s_grid[1024];
+#elif defined(IQ_GRID_BUFFER)
+// IQ2_XS / IQ2_XXS MMVQ: the grid is read from a storage buffer
 #elif defined(DATA_A_IQ2_XS)
 shared uvec2 iq2xs_grid[512];
 #else
@@ -1081,7 +1083,7 @@ const uvec2[256] iq2xxs_grid_const = {
     uvec2(0x08080808, 0x2b2b082b), uvec2(0x08192b08, 0x2b2b1908), uvec2(0x19190808, 0x2b2b2b08), uvec2(0x08081908, 0x2b2b2b19)
 };
 
-#if defined(DATA_A_IQ2_XXS)
+#if defined(DATA_A_IQ2_XXS) && !defined(IQ_GRID_BUFFER)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1253,7 +1255,7 @@ const uvec2 iq2xs_grid_const[512] = {
     uvec2(0x082b2b08, 0x2b2b2b2b), uvec2(0x082b2b2b, 0x2b2b2b2b), uvec2(0x2b190819, 0x2b2b2b2b), uvec2(0x2b2b2b2b, 0x2b2b2b2b),
 };
 
-#if defined(DATA_A_IQ2_XS)
+#if defined(DATA_A_IQ2_XS) && !defined(IQ_GRID_BUFFER)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1689,6 +1691,8 @@ uvec2 iq2s_grid_get(const uint idx) {
 shared uint32_t iq3s_grid_p[256];
 #elif defined(DATA_A_IQ3_S)
 shared uint32_t iq3s_grid[512];
+#elif defined(IQ_GRID_BUFFER)
+// IQ3_XXS MMVQ: the grid is read from a storage buffer
 #else
 shared uint32_t iq3xxs_grid[256];
 #endif
@@ -1746,7 +1750,7 @@ const uint32_t iq3xxs_grid_const[256] = {
     0x3e1c1c1c, 0x3e1c3404, 0x3e24140c, 0x3e24240c, 0x3e2c0404, 0x3e2c0414, 0x3e2c1424, 0x3e341c04,
 };
 
-#if defined(DATA_A_IQ3_XXS)
+#if defined(DATA_A_IQ3_XXS) && !defined(IQ_GRID_BUFFER)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
