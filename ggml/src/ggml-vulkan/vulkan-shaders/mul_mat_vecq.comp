@@ -6,6 +6,8 @@
 #define MMQ
 #define NEEDS_IQ1S_GRID_GPU
 #define KVALUES_IQ4NL_I8
+// IQ2_S / IQ3_S: keep the grid tables bit-packed in shared memory (see types.glsl)
+#define IQ_GRID_PACKED
 #define B_TYPE block_q8_1_x4
 
 #include "mul_mat_vec_base.glsl"
