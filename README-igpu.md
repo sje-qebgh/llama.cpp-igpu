@@ -17,7 +17,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
-| Token generation, IQ2_S / IQ3_S | grid tables kept bit-packed in shared memory in MMVQ (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB): the table is copied once per workgroup, and token generation launches many small workgroups | measured on Lunar Lake |
+| Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
@@ -58,6 +58,9 @@ move where expected.
 | Q6_K: 4 rows per workgroup | Qwen3.6-35B-A3B UD-IQ3_S | 23.9 t/s | 24.8 t/s | dense Q6_K is about half of the token time in this quant |
 | IQ3_S MoE: 8 lanes per row | Gemma-4 26B-A4B UD-IQ4_NL | 20.2 t/s | 21.0 t/s | IQ3_S gate_up (k=2816) 300 -> 245 us per call |
 | recurrent state read in place | Qwen3.6-35B-A3B UD-IQ3_S | 28.85 t/s | 30.24 t/s | 60 of 62 `GET_ROWS` per token gone (1.8 ms); `GATED_DELTA_NET` +0.3 ms since the state no longer comes from cache; 5 alternating runs each |
+| IQ grid tables in a storage buffer (vs bit-packed shared memory) | Qwen3.6-35B-A3B UD-IQ3_S | 30.24 t/s | 31.39 t/s | 6 alternating runs each |
+| IQ grid tables in a storage buffer | Qwen3.6-35B-A3B UD-IQ2_XXS | 32.97 t/s | 33.80 t/s | |
+| IQ grid tables in a storage buffer | Gemma-4 26B-A4B UD-IQ4_NL | 22.07 t/s | 22.79 t/s | |
 
 The absolute numbers in this table are lower than the alternating runs above because they were taken in
 other sessions; compare within a row only.
@@ -72,6 +75,8 @@ Token generation on Meteor Lake is not measured yet.
 - Large dense mat-vecs (lm_head, big FFNs) reach about 100 GB/s of the ~136 GB/s theoretical bandwidth.
   Dense models are close to the limit; only fewer bytes per weight make them faster.
 - GPU time is 96-97% of wall time, so host-side submission is not the bottleneck.
+- How the IQ grid table reaches the shader matters: a GLSL constant array indexed per lookup was 2x slower than the
+  shared memory copy on the Windows driver, while a storage buffer beat the shared memory copy by about 4%.
 - Small MoE mat-vecs with IQ quants are limited by the cost of decoding each weight, not by bandwidth
   (about 100-115 G weights/s for IQ2_S/IQ3_S experts against about 150-230 for K-quants).
 - Lane split helps IQ3_S but makes IQ4_NL slower (k=704 down: 202 -> 245 us at 4 lanes, 349 us at 2),
@@ -123,7 +128,7 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 
 - Qwen3.5/3.6: the new recurrent state is still written to the op output and then copied into the cache (`CPY`),
   about 0.6-0.8 ms per token on Lunar Lake. Writing it straight into the cache needs a change to the op.
-- IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode (the remaining limit after the table work).
+- IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode.
 - MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS (Qwen3.6 UD-IQ2_XXS / IQ3_XXS experts still use the float path).
 - IQ3_S and K-quant MoE matmuls are about 2.7x slower than IQ4_NL on Meteor Lake; suspected register spills at SIMD16.
 - Check MMVQ on Meteor Lake (`GGML_VK_FORCE_MMVQ=1`).
