@@ -16,6 +16,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
+| Token generation, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot mat-vec (MMVQ) shaders, incl. MoE; grid from the storage buffer like IQ2_S / IQ3_S | tests pass, not measured yet |
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
@@ -130,7 +131,7 @@ per-type default above keeps them on fp16. GPU time per token is at or above wal
   BM/BN must stay the same; invalid shapes are ignored with a warning. `GGML_VK_WT_PRINT=1` prints the tiles in use.
 - `GGML_VK_SUBGROUP_OVERRIDE="matmul=16,!iq3_s_q8_1=8"`: subgroup size by pipeline name substring; `!` also replaces a
   size the backend already pins. Check results with `test-backend-ops` under the same setting.
-- `GGML_VK_MMVQ_IQ_SHMEM=1`: IQ2_S / IQ3_S MMVQ copy the (bit-packed) grid table into shared memory per workgroup instead of reading it from a storage buffer
+- `GGML_VK_MMVQ_IQ_SHMEM=1`: IQ2/IQ3 MMVQ copy the (bit-packed) grid table into shared memory per workgroup instead of reading it from a storage buffer
 
 PowerShell keeps environment variables for the whole session: remove them (`Remove-Item Env:NAME`) before
 measuring a baseline.
@@ -165,7 +166,7 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 - Qwen3.5/3.6: the new recurrent state is still written to the op output and then copied into the cache (`CPY`),
   about 0.6-0.8 ms per token on Lunar Lake. Writing it straight into the cache needs a change to the op.
 - IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode.
-- MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS (Qwen3.6 UD-IQ2_XXS / IQ3_XXS experts still use the float path).
+- Meteor Lake: measure the new IQ2_XXS / IQ2_XS / IQ3_XXS MMVQ (off by default there, `GGML_VK_FORCE_MMVQ=1`).
 - K-quant and IQ3_S MoE prefill on Meteor Lake: Qwen3-Coder UD-Q2_K_XL only reaches 35-50 t/s (IQ2_XXS: 150-200).
   Suspected register spills of the K-quant tiles at SIMD16; test with the MMQ knobs above.
 - Re-measure Meteor Lake tg with the per-type MMVQ default.
