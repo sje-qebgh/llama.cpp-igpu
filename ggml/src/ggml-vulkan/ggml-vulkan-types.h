@@ -790,6 +790,8 @@ struct vk_device_struct {
     // 0 means "no override".
     uint8_t mmvq_rows_ovr[GGML_TYPE_COUNT];
     uint8_t mmvq_id_rows_ovr[GGML_TYPE_COUNT];
+    uint8_t mmvq_lanes_ovr[GGML_TYPE_COUNT];     // lanes per row, 0 = whole subgroup
+    uint8_t mmvq_id_lanes_ovr[GGML_TYPE_COUNT];
     uint8_t mmvq_wg_ovr[GGML_TYPE_COUNT];     // 0 none, 1 subgroup, 2 large
     uint8_t mmvq_id_wg_ovr[GGML_TYPE_COUNT];
     uint32_t mmvq_sg_ovr;
