@@ -314,6 +314,10 @@ public:
     // used in view offsets, need to match for valid graph reuse
     uint32_t head;
     int32_t rs_z;
+
+    // single state that is read from and written back to the same cell (e.g. token generation of one sequence),
+    // so build_rs_direct can read it in place instead of gathering a copy
+    bool s_identity = false;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -1453,6 +1457,15 @@ struct llm_graph_context {
                 int32_t   state_size,
                 int32_t   n_seqs,
             const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
+
+    // like build_rs, but when the ubatch reads its single state from the cell it writes back to,
+    // return a view of that cell instead of a gathered copy.
+    // the caller must not modify the result in place and must write the new state only after its last read.
+    ggml_tensor * build_rs_direct(
+            llm_graph_input_rs * inp,
+            ggml_tensor * s,
+                int32_t   state_size,
+                int32_t   n_seqs) const;
 
     // store the conv history of the ubatch cells, the last n_cols columns of conv_x {n_cols + n_seq_tokens, channels, n_seqs},
     // at byte offset offs of each row of s, and with n_rs_seq > 0 once per rollback slot of this ubatch
