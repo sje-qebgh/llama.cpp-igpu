@@ -983,7 +983,9 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
 
 #if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S)
-#if defined(DATA_A_IQ2_S) && defined(IQ_GRID_PACKED)
+#if defined(DATA_A_IQ2_S) && defined(IQ_GRID_BUFFER)
+// the grid is read from a storage buffer (see mul_mat_vec_iface.glsl), nothing to keep in shared memory
+#elif defined(DATA_A_IQ2_S) && defined(IQ_GRID_PACKED)
 // 1024 entries x 16 bits (8 two-bit level codes), two entries per word
 shared uint32_t iq2s_grid_p[512];
 #elif defined(DATA_A_IQ2_S)
@@ -1553,7 +1555,7 @@ const uvec2 iq2s_grid_const[1024] = {
     uvec2(0x082b082b, 0x2b2b2b2b), uvec2(0x082b2b08, 0x2b2b2b2b), uvec2(0x2b082b08, 0x2b2b2b2b), uvec2(0x2b2b2b2b, 0x2b2b2b2b)
 };
 
-#if defined(DATA_A_IQ2_S)
+#if defined(DATA_A_IQ2_S) && !defined(IQ_GRID_BUFFER)
 #define NEEDS_INIT_IQ_SHMEM
 #if defined(IQ_GRID_PACKED)
 // Packed iq2s grid: every grid byte is one of 3 levels {0x08, 0x19, 0x2b}, so an 8-byte entry
@@ -1681,7 +1683,8 @@ uvec2 iq2s_grid_get(const uint idx) {
 #endif
 
 #if defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S)
-#if defined(DATA_A_IQ3_S) && defined(IQ_GRID_PACKED)
+#if defined(DATA_A_IQ3_S) && defined(IQ_GRID_BUFFER)
+#elif defined(DATA_A_IQ3_S) && defined(IQ_GRID_PACKED)
 // 512 entries x 12 bits (4 three-bit level codes) stored as 16 bits, two entries per word
 shared uint32_t iq3s_grid_p[256];
 #elif defined(DATA_A_IQ3_S)
@@ -1855,7 +1858,7 @@ const uint32_t iq3s_grid_const[512] = {
     0x0f090307, 0x0f090501, 0x0f090b01, 0x0f0b0505, 0x0f0b0905, 0x0f0d0105, 0x0f0d0703, 0x0f0f0101,
 };
 
-#if defined(DATA_A_IQ3_S)
+#if defined(DATA_A_IQ3_S) && !defined(IQ_GRID_BUFFER)
 #define NEEDS_INIT_IQ_SHMEM
 #if defined(IQ_GRID_PACKED)
 // Packed iq3s grid: every grid byte is an odd level 2*c+1 (c = 0..7), so a 4-byte entry is

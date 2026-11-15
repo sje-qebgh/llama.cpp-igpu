@@ -497,6 +497,17 @@ int32_t iq_apply_signs(const uint32_t grid, const uint signs4) {
 }
 #endif
 
+#if defined(IQ_GRID_BUFFER) && defined(DATA_A_IQ2_S)
+uvec2 iq2s_grid_get(const uint idx) {
+    return uvec2(data_iq_grid[2 * idx], data_iq_grid[2 * idx + 1]);
+}
+#endif
+#if defined(IQ_GRID_BUFFER) && defined(DATA_A_IQ3_S)
+uint32_t iq3s_grid_get(const uint idx) {
+    return data_iq_grid[idx];
+}
+#endif
+
 #if defined(DATA_A_IQ2_S)
 // One 32-quant sub-block per call: 4 grid entries of 8 magnitudes each, sign bytes stored after
 // the 32 grid index bytes, 2 extra index bits per entry in qh, one 4-bit scale per 16 quants.
