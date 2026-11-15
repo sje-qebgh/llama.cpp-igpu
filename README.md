@@ -1,4 +1,4 @@
-> **llama.cpp-igpu**: a fork of llama.cpp tuned for integrated GPUs without matrix cores (Intel Meteor Lake first), with faster Vulkan prefill for low-bit quants (Q2-Q4, IQ*).
+> **llama.cpp-igpu**: a fork of llama.cpp tuned for Intel integrated GPUs (Meteor Lake, Lunar Lake), with faster Vulkan prefill and token generation for low-bit quants (Q2-Q4, IQ*).
 > See **[README-igpu.md](README-igpu.md)** for what changed, benchmarks and recommended settings. Everything below is the upstream README.
 
 # llama.cpp
