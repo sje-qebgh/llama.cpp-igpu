@@ -18,6 +18,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | grid tables kept bit-packed in shared memory in MMVQ (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB): the table is copied once per workgroup, and token generation launches many small workgroups | measured on Lunar Lake |
+| Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
@@ -56,6 +57,7 @@ move where expected.
 | packed IQ grid tables (+ rows per workgroup) | Qwen3.6-35B-A3B UD-IQ2_XXS | 26.1 t/s | 28.4 t/s | IQ2_S MoE down 126 -> 69 us per call |
 | Q6_K: 4 rows per workgroup | Qwen3.6-35B-A3B UD-IQ3_S | 23.9 t/s | 24.8 t/s | dense Q6_K is about half of the token time in this quant |
 | IQ3_S MoE: 8 lanes per row | Gemma-4 26B-A4B UD-IQ4_NL | 20.2 t/s | 21.0 t/s | IQ3_S gate_up (k=2816) 300 -> 245 us per call |
+| recurrent state read in place | Qwen3.6-35B-A3B UD-IQ3_S | 28.85 t/s | 30.24 t/s | 60 of 62 `GET_ROWS` per token gone (1.8 ms); `GATED_DELTA_NET` +0.3 ms since the state no longer comes from cache; 5 alternating runs each |
 
 The absolute numbers in this table are lower than the alternating runs above because they were taken in
 other sessions; compare within a row only.
@@ -118,8 +120,8 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 
 ## Roadmap
 
-- Qwen3.5/3.6: the recurrent state is gathered (`GET_ROWS`), updated and copied back (`CPY`) every token,
-  about 2.9 ms per token on Lunar Lake (~7%). A single sequence could update it in place.
+- Qwen3.5/3.6: the new recurrent state is still written to the op output and then copied into the cache (`CPY`),
+  about 0.6-0.8 ms per token on Lunar Lake. Writing it straight into the cache needs a change to the op.
 - IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode (the remaining limit after the table work).
 - MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS (Qwen3.6 UD-IQ2_XXS / IQ3_XXS experts still use the float path).
 - IQ3_S and K-quant MoE matmuls are about 2.7x slower than IQ4_NL on Meteor Lake; suspected register spills at SIMD16.
