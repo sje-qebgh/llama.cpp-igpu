@@ -3454,7 +3454,12 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     // Lanes per row for the split MMVQ shader, or 0 to keep one row per subgroup.
     // Only for the single-subgroup workgroup; lanes * K_PER_ITER must be a multiple of 32.
     auto const &mmvq_lanes = [&](ggml_type t, bool id, uint32_t wg_size, shader_reduction_mode r) -> uint32_t {
-        const uint32_t lanes = id ? device->mmvq_id_lanes_ovr[t] : device->mmvq_lanes_ovr[t];
+        uint32_t lanes = id ? device->mmvq_id_lanes_ovr[t] : device->mmvq_lanes_ovr[t];
+        if (lanes == 0 && id && device->mmvq_xe2_tuned && t == GGML_TYPE_IQ3_S) {
+            // Arc 140V tg128: Gemma4 26B-A4B gate_up (k=2816) 300 -> 245 us, Qwen3.6 35B-A3B down (k=512) 81 -> 76 us.
+            // IQ4_NL got slower with fewer lanes per row (k=704 down: 202 -> 245 us at 4 lanes, 349 us at 2).
+            lanes = 8;
+        }
         if (lanes == 0 || r != SHADER_REDUCTION_MODE_SUBGROUP || !device->subgroup_shuffle || lanes >= wg_size || wg_size % lanes != 0) {
             return 0;
         }
