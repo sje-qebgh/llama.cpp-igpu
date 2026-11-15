@@ -488,7 +488,7 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
 }
 #endif
 
-#if defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_S)
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S)
 // Negate the bytes of a packed grid word selected by a 4-bit sign mask (bit i -> byte i).
 // Grid magnitudes are never zero, so the per-byte two's complement cannot carry into the next byte.
 int32_t iq_apply_signs(const uint32_t grid, const uint signs4) {
@@ -505,6 +505,108 @@ uvec2 iq2s_grid_get(const uint idx) {
 #if defined(IQ_GRID_BUFFER) && defined(DATA_A_IQ3_S)
 uint32_t iq3s_grid_get(const uint idx) {
     return data_iq_grid[idx];
+}
+#endif
+
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ3_XXS)
+// 7 stored sign bits -> 8 sign bits; the 8th makes the number of negative values even (ksigns_iq2xs)
+uint iq_signs8(const uint s7) {
+    return s7 | ((bitCount(s7) & 1u) << 7);
+}
+#endif
+
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS)
+uvec2 iq2_grid_get(const uint idx) {
+#if defined(IQ_GRID_BUFFER)
+    return uvec2(data_iq_grid[2 * idx], data_iq_grid[2 * idx + 1]);
+#elif defined(DATA_A_IQ2_XXS)
+    return iq2xxs_grid[idx];
+#else
+    return iq2xs_grid[idx];
+#endif
+}
+#endif
+
+#if defined(DATA_A_IQ3_XXS)
+uint32_t iq3xxs_grid_get(const uint idx) {
+#if defined(IQ_GRID_BUFFER)
+    return data_iq_grid[idx];
+#else
+    return iq3xxs_grid[idx];
+#endif
+}
+#endif
+
+#if defined(DATA_A_IQ2_XXS)
+// One 32-quant sub-block per call: 4 grid indices (8 magnitudes each) in the first word,
+// 4 x 7 sign bits and a 4-bit scale in the second.
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const uint ib_k = ib_a / 8;
+    const uint ib32 = ib_a % 8;
+
+    const uint32_t idx4 = pack32(u16vec2(data_a_packed16[ib_k].qs[4 * ib32    ], data_a_packed16[ib_k].qs[4 * ib32 + 1]));
+    const uint32_t aux  = pack32(u16vec2(data_a_packed16[ib_k].qs[4 * ib32 + 2], data_a_packed16[ib_k].qs[4 * ib32 + 3]));
+
+    int32_t q_sum = 0;
+    [[unroll]] for (uint l = 0; l < 4; ++l) {
+        const uvec2 grid = iq2_grid_get((idx4 >> (8 * l)) & 0xFFu);
+        const uint sign = iq_signs8((aux >> (7 * l)) & 0x7Fu);
+
+        q_sum += dotPacked4x8EXT(iq_apply_signs(grid.x, sign & 0xFu), cache_b_qs[2 * l    ]);
+        q_sum += dotPacked4x8EXT(iq_apply_signs(grid.y, sign >> 4),   cache_b_qs[2 * l + 1]);
+    }
+
+    // db = d * (0.5 + scale) * 0.25 = d * (2 * scale + 1) * 0.125
+    return FLOAT_TYPE(float(cache_b_ds.x) * float(data_a[ib_k].d) * 0.125f * float(int32_t(2 * (aux >> 28) + 1) * q_sum));
+}
+#endif
+
+#if defined(DATA_A_IQ2_XS)
+// One 32-quant sub-block per call: 4 x (9-bit grid index, 7 sign bits), one 4-bit scale per 16 quants.
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const uint ib_k = ib_a / 8;
+    const uint ib32 = ib_a % 8;
+
+    const uint scales = data_a[ib_k].scales[ib32];
+
+    int32_t q_sum[2] = int32_t[2](0, 0);
+    [[unroll]] for (uint l = 0; l < 4; ++l) {
+        const uint q = data_a[ib_k].qs[4 * ib32 + l];
+        const uvec2 grid = iq2_grid_get(q & 511u);
+        const uint sign = iq_signs8(q >> 9);
+
+        q_sum[l / 2] += dotPacked4x8EXT(iq_apply_signs(grid.x, sign & 0xFu), cache_b_qs[2 * l    ]);
+        q_sum[l / 2] += dotPacked4x8EXT(iq_apply_signs(grid.y, sign >> 4),   cache_b_qs[2 * l + 1]);
+    }
+
+    const int32_t sum = int32_t(2 * (scales & 0xFu) + 1) * q_sum[0] + int32_t(2 * (scales >> 4) + 1) * q_sum[1];
+
+    return FLOAT_TYPE(float(cache_b_ds.x) * float(data_a[ib_k].d) * 0.125f * float(sum));
+}
+#endif
+
+#if defined(DATA_A_IQ3_XXS)
+// One 32-quant sub-block per call: 8 grid indices (4 magnitudes each) in the first 64 bytes of qs,
+// then one word per sub-block with 4 x 7 sign bits and a 4-bit scale.
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const uint ib_k = ib_a / 8;
+    const uint ib32 = ib_a % 8;
+
+    const uint32_t idx_lo = pack32(u16vec2(data_a_packed16[ib_k].qs[4 * ib32    ], data_a_packed16[ib_k].qs[4 * ib32 + 1]));
+    const uint32_t idx_hi = pack32(u16vec2(data_a_packed16[ib_k].qs[4 * ib32 + 2], data_a_packed16[ib_k].qs[4 * ib32 + 3]));
+    const uint32_t aux    = pack32(u16vec2(data_a_packed16[ib_k].qs[QUANT_K / 8 + 2 * ib32], data_a_packed16[ib_k].qs[QUANT_K / 8 + 2 * ib32 + 1]));
+
+    int32_t q_sum = 0;
+    [[unroll]] for (uint l = 0; l < 4; ++l) {
+        const uint32_t idx2 = (l < 2 ? idx_lo : idx_hi) >> (16 * (l & 1));
+        const uint sign = iq_signs8((aux >> (7 * l)) & 0x7Fu);
+
+        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3xxs_grid_get(idx2 & 0xFFu),        sign & 0xFu), cache_b_qs[2 * l    ]);
+        q_sum += dotPacked4x8EXT(iq_apply_signs(iq3xxs_grid_get((idx2 >> 8) & 0xFFu), sign >> 4),   cache_b_qs[2 * l + 1]);
+    }
+
+    // db = d * (0.5 + scale) * 0.5 = d * (2 * scale + 1) * 0.25
+    return FLOAT_TYPE(float(cache_b_ds.x) * float(data_a[ib_k].d) * 0.25f * float(int32_t(2 * (aux >> 28) + 1) * q_sum));
 }
 #endif
 
