@@ -1981,7 +1981,9 @@ static uint32_t ggml_vk_xe2_mmvq_rows(ggml_type t, bool id) {
         case GGML_TYPE_Q3_K: return 4;
         case GGML_TYPE_Q4_K: return 4;
         case GGML_TYPE_Q5_K: return 4;
-        case GGML_TYPE_Q6_K: return id ? 4 : 2;
+        // Q6_K dense (attention / linear-attention / shared-expert weights in Qwen3.5/3.6 UD quants):
+        // Qwen3.6-35B-A3B IQ3_S tg128: 2 rows 23.9 t/s, 4 rows 24.8 t/s, 8 rows 24.8 t/s, 16 rows 24.9 t/s, 1 row 20.9 t/s
+        case GGML_TYPE_Q6_K: return 4;
         // the grid is copied into shared memory once per workgroup, so more rows per workgroup amortize it
         // (Qwen3.6-35B-A3B IQ3_S tg128: 8 rows 25.2 t/s, 16 rows 25.8 t/s; indexing the constant table directly: 11 t/s)
         case GGML_TYPE_IQ2_S:
