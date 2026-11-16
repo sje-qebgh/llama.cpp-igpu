@@ -12,13 +12,14 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 |---|---|---|
 | Prefill, IQ2_S | integer dot (q8_1) MMQ shaders for mul_mat and mul_mat_id | measured |
 | Prefill, IQ4_NL | integer dot MMQ shaders (upstream only had them on coopmat GPUs) | measured |
-| Prefill, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot MMQ shaders | tests pass, not benchmarked yet |
-| Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass, not benchmarked yet |
+| Prefill, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot MMQ shaders | measured (Qwen3.6 UD-IQ2_XXS) |
+| Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
+| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_S, IQ4_XS, and IQ3_S for k < 2048; fp16 for the rest (upstream: fp16 for every type) | from forced-MMVQ runs on Meteor Lake; default not re-measured yet |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
@@ -34,6 +35,18 @@ Intel Core Ultra (Meteor Lake), Arc iGPU, DDR5-5600 x2, Windows, `-ngl 99`.
 | Qwen3.6-35B-A3B UD-IQ3_S | pp4096, `-ub 4096` | 79.0 t/s | 144.8 t/s |
 | Gemma-4 26B-A4B UD-IQ4_NL | pp512, `-ub 512` | 69.0 t/s | 90.9 t/s |
 | Gemma-4 26B-A4B UD-IQ4_NL | pp2048, `-ub 2048` | 80.4 t/s | 101.4 t/s |
+
+Core Ultra 5 135H, driver 32.0.101.8991, upstream 9fba51d vs this fork b9f1952, `-fa 0 -r 2`, 2 alternating runs (mean):
+
+| Model | pp512 (`-ub 512`) upstream / fork | pp2048 (`-ub 2048`) upstream / fork |
+|---|---|---|
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 71.4 / 152.5 (+114%) | 95.0 / 197.3 (+108%) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 74.6 / 123.2 (+65%) | 102.5 / 183.9 (+79%) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 83.1 / 114.7 (+38%) | 101.6 / 128.3 (+26%) |
+| gpt-oss-20b UD-Q4_K_XL (MXFP4 experts) | 298.9 / 298.2 | 234.8 / 237.9 |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL (K-quant experts) | 35.1 / 35.1 | 49.8 / 49.4 |
+
+All `test-backend-ops` checks pass on this GPU (new IQ MMQ types, `GATED_DELTA_NET`, MMVQ forced on).
 
 ### Token generation, Lunar Lake
 
@@ -68,7 +81,21 @@ other sessions; compare within a row only.
 Other models on the current build, for reference: GLM-4.7-Flash UD-Q3_K_XL 25.3-25.7 t/s,
 LFM2 MoE 24B-A2B Q4_K_S 48.3 t/s.
 
-Token generation on Meteor Lake is not measured yet.
+### Token generation, Meteor Lake
+
+Same machine and builds, tg128, 2 alternating rounds of `-r 3`. The new per-type MMVQ default is not in this build;
+"MMVQ forced" (`GGML_VK_FORCE_MMVQ=1`) shows the effect for the models whose MoE experts are all MMVQ-friendly types.
+
+| Model | upstream | fork (fp16 mat-vec) | fork, MMVQ forced |
+|---|---|---|---|
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 18.9 | 18.8 | 30.1 (+60%) |
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 15.8 | 16.2 | 23.1 (+46%) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 15.7 | 15.7 | 20.4 (+30%) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 14.7 | 14.6 | 13.1 (-10%) |
+| gpt-oss-20b UD-Q4_K_XL | 20.6 | 20.6 | 16.6 (-19%) |
+
+Per-op timings show which types win: Q8_0, MXFP4 and IQ4_NL mat-vecs are slower with MMVQ on this GPU, so the
+per-type default above keeps them on fp16. GPU time per token is at or above wall time, so submission is not the limit.
 
 ### What the profiles say (Lunar Lake, tg)
 
@@ -94,6 +121,15 @@ Token generation on Meteor Lake is not measured yet.
   Needs subgroup shuffle; lanes x values per lane must be a multiple of 32, other values are ignored.
 - `GGML_VK_MMVQ_SG`: subgroup size for the MMVQ pipelines (Intel), e.g. `16`
 - `GGML_VK_MMVQ_DEBUG=1`: log once per shape whether a mat-vec took the MMVQ path and why
+- `GGML_VK_XE1_MMVQ_LEGACY=1`: upstream MMVQ selection on Xe-LPG iGPUs with the Windows driver (fp16 for every type)
+
+### Knobs for experiments (Vulkan, MMQ / prefill, GPUs without matrix cores)
+
+- `GGML_VK_WT_<NAME>="BLOCK,BM,BN,BK,WM,WN,WMITER,TM,TN,TK,WARP"`: matmul warptile, `NAME` one of `L M S`, `L_MMQ M_MMQ`,
+  `L_INT M_INT`, `L_INT_K M_INT_K`, and for MoE `ID_L ID_M MMQID_L MMQID_M ID_INT_L ID_INT_M ID_INT_K_L ID_INT_K_M`.
+  BM/BN must stay the same; invalid shapes are ignored with a warning. `GGML_VK_WT_PRINT=1` prints the tiles in use.
+- `GGML_VK_SUBGROUP_OVERRIDE="matmul=16,!iq3_s_q8_1=8"`: subgroup size by pipeline name substring; `!` also replaces a
+  size the backend already pins. Check results with `test-backend-ops` under the same setting.
 - `GGML_VK_MMVQ_IQ_SHMEM=1`: IQ2_S / IQ3_S MMVQ copy the (bit-packed) grid table into shared memory per workgroup instead of reading it from a storage buffer
 
 PowerShell keeps environment variables for the whole session: remove them (`Remove-Item Env:NAME`) before
@@ -130,8 +166,9 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   about 0.6-0.8 ms per token on Lunar Lake. Writing it straight into the cache needs a change to the op.
 - IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode.
 - MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS (Qwen3.6 UD-IQ2_XXS / IQ3_XXS experts still use the float path).
-- IQ3_S and K-quant MoE matmuls are about 2.7x slower than IQ4_NL on Meteor Lake; suspected register spills at SIMD16.
-- Check MMVQ on Meteor Lake (`GGML_VK_FORCE_MMVQ=1`).
+- K-quant and IQ3_S MoE prefill on Meteor Lake: Qwen3-Coder UD-Q2_K_XL only reaches 35-50 t/s (IQ2_XXS: 150-200).
+  Suspected register spills of the K-quant tiles at SIMD16; test with the MMQ knobs above.
+- Re-measure Meteor Lake tg with the per-type MMVQ default.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
 
 ## Keeping up with upstream

@@ -2282,6 +2282,70 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
         }
 
+        // ---- experimental tuning knobs: env overrides for scalar (non-coopmat) matmul warptiles ----
+        // GGML_VK_WT_<NAME>="BLOCK,BM,BN,BK,WM,WN,WMITER,TM,TN,TK,WARP"  (BM/BN must stay the same)
+        // NAME: L,M,S (f16/f32 matmul), L_MMQ,M_MMQ (dequant matmul), L_INT,M_INT (q8_1 int-dot MMQ),
+        //       L_INT_K,M_INT_K (K-quant int-dot MMQ)
+        if (!device->coopmat_support && !device->coopmat2) {
+            auto apply_wt = [&](const char * name, std::vector<uint32_t> & wt) {
+                std::string env = std::string("GGML_VK_WT_") + name;
+                const char * v = getenv(env.c_str());
+                if (!v || wt.size() < 11) return;
+                std::vector<uint32_t> nw;
+                std::string str(v);
+                size_t pos = 0;
+                while (pos <= str.size()) {
+                    size_t c = str.find(',', pos);
+                    if (c == std::string::npos) c = str.size();
+                    nw.push_back((uint32_t) std::stoul(str.substr(pos, c - pos)));
+                    pos = c + 1;
+                }
+                if (nw.size() != 11) { std::cerr << "ggml_vulkan: " << env << ": need 11 values, ignored" << std::endl; return; }
+                const uint32_t BLOCK = nw[0], BM = nw[1], BN = nw[2], WM = nw[4], WN = nw[5], WMITER = nw[6], TM = nw[7], TN = nw[8], WARP = nw[10];
+                bool ok = BM == wt[1] && BN == wt[2] && WARP > 0 && WM > 0 && WN > 0 && WMITER > 0 && TM > 0 && TN > 0 &&
+                          BLOCK % WARP == 0 && BM % WM == 0 && BN % WN == 0 &&
+                          (BM / WM) * (BN / WN) == BLOCK / WARP &&
+                          (WM * WN) % (WARP * TM * TN * WMITER) == 0 && (WM * WN) / (WARP * TM * TN * WMITER) > 0 &&
+                          WM % WMITER == 0 && (WM / WMITER) % TM == 0 &&
+                          WN % ((WM * WN) / (WARP * TM * TN * WMITER)) == 0 &&
+                          (WN / ((WM * WN) / (WARP * TM * TN * WMITER))) % TN == 0 &&
+                          (WM / WMITER / TM) * (WN / ((WM * WN) / (WARP * TM * TN * WMITER)) / TN) == WARP;
+                if (!ok) {
+                    static std::unordered_map<std::string, bool> warned;
+                    if (warned.emplace(env, true).second) std::cerr << "ggml_vulkan: " << env << ": invalid tile, ignored" << std::endl;
+                    return;
+                }
+                static std::unordered_map<std::string, bool> printed;
+                if (printed.emplace(env, true).second) std::cerr << "ggml_vulkan: " << env << " = " << v << std::endl;
+                wt = nw;
+            };
+            apply_wt("L", l_warptile);             apply_wt("M", m_warptile);             apply_wt("S", s_warptile);
+            apply_wt("L_MMQ", l_warptile_mmq);     apply_wt("M_MMQ", m_warptile_mmq);
+            apply_wt("L_INT", l_warptile_mmq_int); apply_wt("M_INT", m_warptile_mmq_int);
+            apply_wt("L_INT_K", l_warptile_mmq_int_k); apply_wt("M_INT_K", m_warptile_mmq_int_k);
+            // MoE (MUL_MAT_ID) tiles
+            apply_wt("ID_L", l_warptile_id);              apply_wt("ID_M", m_warptile_id);
+            apply_wt("MMQID_L", l_warptile_mmqid);        apply_wt("MMQID_M", m_warptile_mmqid);
+            apply_wt("ID_INT_L", l_warptile_mmqid_int);   apply_wt("ID_INT_M", m_warptile_mmqid_int);
+            apply_wt("ID_INT_K_L", l_warptile_mmqid_int_k); apply_wt("ID_INT_K_M", m_warptile_mmqid_int_k);
+            // print effective MoE tiles once so sweeps can be built from them
+            if (getenv("GGML_VK_WT_PRINT")) {
+                auto pr = [](const char * n, const std::vector<uint32_t> & w) {
+                    std::cerr << "ggml_vulkan: tile " << n << " =";
+                    for (size_t i = 0; i < w.size() && i < 11; i++) std::cerr << (i ? "," : " ") << w[i];
+                    std::cerr << std::endl;
+                };
+                static bool done = false;
+                if (!done) {
+                    done = true;
+                    pr("L", l_warptile); pr("L_MMQ", l_warptile_mmq); pr("L_INT", l_warptile_mmq_int); pr("L_INT_K", l_warptile_mmq_int_k);
+                    pr("ID_L", l_warptile_id); pr("ID_M", m_warptile_id); pr("MMQID_L", l_warptile_mmqid); pr("MMQID_M", m_warptile_mmqid);
+                    pr("ID_INT_L", l_warptile_mmqid_int); pr("ID_INT_M", m_warptile_mmqid_int);
+                    pr("ID_INT_K_L", l_warptile_mmqid_int_k); pr("ID_INT_K_M", m_warptile_mmqid_int_k);
+                }
+            }
+        }
+
         const bool use_cm1_int = device->coopmat_int_support &&
                                  (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4);
 
@@ -2369,6 +2433,53 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
         if (!require_full_subgroups && required_subgroup_size == 0) {
             required_subgroup_size = get_subgroup_size(name, device->architecture);
+        }
+
+        // ---- experimental tuning knobs: "!name=N" entries in GGML_VK_SUBGROUP_OVERRIDE replace an already pinned size too
+        if (!require_full_subgroups && device->subgroup_size_control) {
+            static const char * sg_env_f = getenv("GGML_VK_SUBGROUP_OVERRIDE");
+            if (sg_env_f) {
+                std::string str(sg_env_f);
+                size_t pos = 0;
+                while (pos < str.size()) {
+                    size_t c = str.find(',', pos);
+                    if (c == std::string::npos) c = str.size();
+                    std::string item = str.substr(pos, c - pos);
+                    size_t eq = item.find('=');
+                    if (item.size() > 1 && item[0] == '!' && eq != std::string::npos &&
+                        strstr(name, item.substr(1, eq - 1).c_str()) != nullptr) {
+                        uint32_t sz = (uint32_t) std::stoul(item.substr(eq + 1));
+                        if (sz >= device->subgroup_min_size && sz <= device->subgroup_max_size) {
+                            required_subgroup_size = sz;
+                        }
+                        break;
+                    }
+                    pos = c + 1;
+                }
+            }
+        }
+        // ---- experimental tuning knobs: GGML_VK_SUBGROUP_OVERRIDE="matmul_=16,..." (substring of pipeline name = subgroup size)
+        // Forces the compiler's SIMD width (Xe-LPG: 8/16/32). Only for pipelines that don't already pin one.
+        if (!require_full_subgroups && required_subgroup_size == 0 && device->subgroup_size_control) {
+            static const char * sg_env = getenv("GGML_VK_SUBGROUP_OVERRIDE");
+            if (sg_env) {
+                std::string str(sg_env);
+                size_t pos = 0;
+                while (pos < str.size()) {
+                    size_t c = str.find(',', pos);
+                    if (c == std::string::npos) c = str.size();
+                    std::string item = str.substr(pos, c - pos);
+                    size_t eq = item.find('=');
+                    if (!item.empty() && item[0] != '!' && eq != std::string::npos && strstr(name, item.substr(0, eq).c_str()) != nullptr) {
+                        uint32_t sz = (uint32_t) std::stoul(item.substr(eq + 1));
+                        if (sz >= device->subgroup_min_size && sz <= device->subgroup_max_size) {
+                            required_subgroup_size = sz;
+                        }
+                        break;
+                    }
+                    pos = c + 1;
+                }
+            }
         }
 
         vk_pipeline *ptr = &base_pipeline;
@@ -5779,6 +5890,7 @@ vk_device ggml_vk_get_device(size_t idx) {
 #endif
 
         device->mmvq_xe2_legacy = getenv("GGML_VK_XE2_MMVQ_LEGACY") != nullptr;
+        device->mmvq_xe1_legacy = getenv("GGML_VK_XE1_MMVQ_LEGACY") != nullptr;
         // Launch shapes tuned on Arc 140V (Lunar Lake) with the Windows driver; see ggml_vk_xe2_mmvq_rows().
         device->mmvq_xe2_tuned = !device->mmvq_xe2_legacy &&
                                  device->vendor_id == VK_VENDOR_ID_INTEL &&
@@ -7800,6 +7912,29 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             }
             if (src0_type == GGML_TYPE_Q2_0 || src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q6_K) {
                 return true;
+            }
+        }
+
+        if (device->architecture == vk_device_architecture::INTEL_XE1 && device->uma &&
+            device->driver_id == vk::DriverId::eIntelProprietaryWindows && !device->mmvq_xe1_legacy) {
+            // Xe-LPG iGPU (Meteor Lake) with the Windows driver: decide per type. tg ms/token of the
+            // mat-vecs, MMVQ / fp16, Core Ultra 5 135H, driver 32.0.101.8991, 5 MoE models:
+            //   Q2_K 0.30, Q3_K 0.67, Q4_K 0.73-0.89, Q5_K 0.94, IQ2_S 0.14-0.33, IQ4_XS 0.88,
+            //   IQ3_S 0.71-0.75 at k=512 but 1.09 at k=2816,
+            //   Q8_0 1.12-1.33, MXFP4 1.39, IQ4_NL 1.18, Q6_K 1.03-1.06, Q5_0 0.98.
+            // GGML_VK_XE1_MMVQ_LEGACY=1 restores the previous behavior (fp16 for every type).
+            switch (src0_type) {
+            case GGML_TYPE_Q2_K:
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q5_K:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ4_XS:
+                return true;
+            case GGML_TYPE_IQ3_S:
+                return k < 2048;
+            default:
+                return false;
             }
         }
 
