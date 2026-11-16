@@ -16,7 +16,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
-| Token generation, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot mat-vec (MMVQ) shaders, incl. MoE; grid from the storage buffer like IQ2_S / IQ3_S | tests pass, not measured yet |
+| Token generation, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot mat-vec (MMVQ) shaders, incl. MoE; grid from the storage buffer like IQ2_S / IQ3_S | measured on Lunar Lake |
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
@@ -75,6 +75,8 @@ move where expected.
 | IQ grid tables in a storage buffer (vs bit-packed shared memory) | Qwen3.6-35B-A3B UD-IQ3_S | 30.24 t/s | 31.39 t/s | 6 alternating runs each |
 | IQ grid tables in a storage buffer | Qwen3.6-35B-A3B UD-IQ2_XXS | 32.97 t/s | 33.80 t/s | |
 | IQ grid tables in a storage buffer | Gemma-4 26B-A4B UD-IQ4_NL | 22.07 t/s | 22.79 t/s | |
+| MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS | Qwen3.6-35B-A3B UD-IQ2_XXS | 33.95 t/s (33.7-34.1) | 35.67 t/s (35.2-36.1) | 3 alternating runs each, faster in every round |
+| MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS | Qwen3.6-35B-A3B UD-IQ3_XXS | 31.24 t/s (31.2-31.3) | 31.61 t/s (31.5-31.8) | same; small gain, within the run-to-run spread of other sessions |
 
 The absolute numbers in this table are lower than the alternating runs above because they were taken in
 other sessions; compare within a row only.
