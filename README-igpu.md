@@ -77,6 +77,9 @@ move where expected.
 | IQ grid tables in a storage buffer | Gemma-4 26B-A4B UD-IQ4_NL | 22.07 t/s | 22.79 t/s | |
 | MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS | Qwen3.6-35B-A3B UD-IQ2_XXS | 33.95 t/s (33.7-34.1) | 35.67 t/s (35.2-36.1) | 3 alternating runs each, faster in every round |
 | MMVQ for IQ2_XXS / IQ2_XS / IQ3_XXS | Qwen3.6-35B-A3B UD-IQ3_XXS | 31.24 t/s (31.2-31.3) | 31.61 t/s (31.5-31.8) | same; small gain, within the run-to-run spread of other sessions |
+| IQ2_S / IQ2_XXS MoE: 4 rows per workgroup (was 16) | Qwen3.6-35B-A3B UD-IQ3_XXS | 31.62 t/s (31.5-31.7) | 32.71 t/s (32.6-32.9) | IQ2_S gate/up 60 -> 50 us per call; 3 alternating runs each, set with `GGML_VK_MMVQ_ID_ROWS` |
+| IQ2_S / IQ2_XXS MoE: 4 rows per workgroup (was 16) | Qwen3.6-35B-A3B UD-IQ3_S | 32.03 t/s (32.0-32.1) | 32.86 t/s (32.8-32.9) | same; measured with all IQ2/IQ3 types at 4 rows |
+| IQ2_S / IQ2_XXS MoE: 4 rows per workgroup (was 16) | Qwen3.6-35B-A3B UD-IQ2_XXS | 36.21 t/s (35.9-36.6) | 37.05 t/s (36.9-37.2) | IQ2_XXS gate/up 50 -> 40 us per call; measured with all IQ2/IQ3 types at 4 rows |
 
 The absolute numbers in this table are lower than the alternating runs above because they were taken in
 other sessions; compare within a row only.
@@ -109,6 +112,10 @@ per-type default above keeps them on fp16. GPU time per token is at or above wal
   shared memory copy on the Windows driver, while a storage buffer beat the shared memory copy by about 4%.
 - Small MoE mat-vecs with IQ quants are limited by the cost of decoding each weight, not by bandwidth
   (about 100-115 G weights/s for IQ2_S/IQ3_S experts against about 150-230 for K-quants).
+- IQ2_S MoE gate/up (m=512, k=2048, 60 us per call): removing parts of the decode in a test build gave 55 us without the sign apply,
+  53 without the grid load, 49 when the grid address does not depend on loaded data, and 44 with no decode at all.
+  So the chain of dependent loads costs more than the instruction count, and even without decode this shape
+  stays at about 60 GB/s. Fewer rows per workgroup helped more than any of these (50 us at 4 rows); lane split did not help.
 - Lane split helps IQ3_S but makes IQ4_NL slower (k=704 down: 202 -> 245 us at 4 lanes, 349 us at 2),
   probably because neighbouring lanes then read different rows.
 - `MUL_MAT_ADD` timings in the perf logger sometimes jump 2-3x without any change in wall time; treat that line with care.
