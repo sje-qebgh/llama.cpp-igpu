@@ -1959,11 +1959,13 @@ static uint32_t ggml_vk_xe2_mmvq_rows(ggml_type t, bool id) {
         // Q6_K dense (attention / linear-attention / shared-expert weights in Qwen3.5/3.6 UD quants):
         // Qwen3.6-35B-A3B IQ3_S tg128: 2 rows 23.9 t/s, 4 rows 24.8 t/s, 8 rows 24.8 t/s, 16 rows 24.9 t/s, 1 row 20.9 t/s
         case GGML_TYPE_Q6_K: return 4;
-        // the grid is copied into shared memory once per workgroup, so more rows per workgroup amortize it
-        // (Qwen3.6-35B-A3B IQ3_S tg128: 8 rows 25.2 t/s, 16 rows 25.8 t/s; indexing the constant table directly: 11 t/s)
+        // MoE gate/up (m=512, k=2048) is faster with few rows per workgroup now that the grid comes from a storage buffer.
+        // Qwen3.6-35B-A3B, us per call at 16 / 8 / 4 rows: IQ2_S 60 / 58 / 50, IQ2_XXS 50 / 44 / 40; IQ2_S down (m=2048, k=512) 54 / 53 / 55
         case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_S: return id ? 4 : 0;
+        // 16 rows are from the time the grid was copied into shared memory once per workgroup (still so with GGML_VK_MMVQ_IQ_SHMEM=1).
+        // Only seen as down (m=2048, k=512), where 8 and 4 rows are not clearly better (IQ3_XXS 68 / 64 / 68, IQ3_S 62 / 61 / 65)
         case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ3_S: return id ? 16 : 0;
         default:             return 0;
