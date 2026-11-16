@@ -777,6 +777,8 @@ struct vk_device_struct {
     int32_t mmvq_mode;
     // GGML_VK_XE2_MMVQ_LEGACY: use the pre-patch Xe2 MMVQ selection (Q2/Q3/Q6 only on Windows)
     bool mmvq_xe2_legacy;
+    // Xe-LPG iGPU + Windows driver: upstream MMVQ selection (fp16 for every type)
+    bool mmvq_xe1_legacy;
     // Xe2 + Intel Windows driver: use the tuned MMVQ launch shapes (off with GGML_VK_XE2_MMVQ_LEGACY)
     bool mmvq_xe2_tuned;
     // GGML_VK_MMVQ_DEBUG: log once per (op, type, shape) whether a mat-vec took the MMVQ path
