@@ -19,9 +19,11 @@ layout(constant_id = 3) const uint LANES_PER_COLUMN = 32;
 const uint COLS_PER_WG = SUBGROUP_SIZE / LANES_PER_COLUMN;
 const uint ROWS_PER_LANE = S_V / LANES_PER_COLUMN;
 
-// NSG subgroups share k/q/g of each token through double-buffered shared memory. Next token is loaded during compute.
+// NSG subgroups share k/q/g through double-buffered shared memory, TB tokens per buffer, so the workgroup
+// waits once per TB tokens. The next block is loaded during compute.
 layout(constant_id = 4) const uint NSG = 8;
 layout(constant_id = 5) const uint WG_SIZE = 256;
+layout(constant_id = 6) const uint TB = 1;
 layout(local_size_x_id = 5, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform Parameters {
@@ -96,27 +98,35 @@ FLOAT_TYPE reduce_partial(FLOAT_TYPE partial) {
     }
 }
 
-shared FLOAT_TYPE k_sh[2][S_V];
-shared FLOAT_TYPE q_sh[2][S_V];
-shared FLOAT_TYPE g_sh[2][S_V];
-shared FLOAT_TYPE beta_sh[2];
+// one g per token unless KDA
+const uint G_LEN = KDA != 0 ? S_V : 1;
+
+shared FLOAT_TYPE k_sh[2 * TB * S_V];
+shared FLOAT_TYPE q_sh[2 * TB * S_V];
+shared FLOAT_TYPE g_sh[2 * TB * G_LEN];
+shared FLOAT_TYPE beta_sh[2 * TB];
 
 uint head_id, seq_id, iq1, iq3;
 
-void load_token(const uint t, const uint b) {
-    const uint q_off = iq3 * sq3 + t * sq2 + iq1 * sq1;
-    const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
-    for (uint i = gl_LocalInvocationIndex; i < S_V; i += WG_SIZE) {
-        k_sh[b][i] = FLOAT_TYPE(data_k[q_off + i]);
-        q_sh[b][i] = FLOAT_TYPE(data_q[q_off + i]);
+// tokens t0 .. t0 + nt - 1 into buffer b
+void load_block(const uint t0, const uint nt, const uint b) {
+    for (uint e = gl_LocalInvocationIndex; e < nt * S_V; e += WG_SIZE) {
+        const uint j = e / S_V;
+        const uint i = e % S_V;
+        const uint t = t0 + j;
+        const uint q_off = iq3 * sq3 + t * sq2 + iq1 * sq1;
+        k_sh[(b * TB + j) * S_V + i] = FLOAT_TYPE(data_k[q_off + i]);
+        q_sh[(b * TB + j) * S_V + i] = FLOAT_TYPE(data_q[q_off + i]);
         if (KDA != 0) {
-            g_sh[b][i] = exp(FLOAT_TYPE(data_g[gb_off * S_V + i]));
+            const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
+            g_sh[(b * TB + j) * G_LEN + i] = exp(FLOAT_TYPE(data_g[gb_off * S_V + i]));
         }
     }
-    if (gl_LocalInvocationIndex == 0) {
-        beta_sh[b] = FLOAT_TYPE(data_beta[gb_off]);
+    for (uint j = gl_LocalInvocationIndex; j < nt; j += WG_SIZE) {
+        const uint gb_off = seq_id * sb3 + (t0 + j) * sb2 + head_id * sb1;
+        beta_sh[b * TB + j] = FLOAT_TYPE(data_beta[gb_off]);
         if (KDA == 0) {
-            g_sh[b][0] = exp(FLOAT_TYPE(data_g[gb_off]));
+            g_sh[(b * TB + j) * G_LEN] = exp(FLOAT_TYPE(data_g[gb_off]));
         }
     }
 }
@@ -143,66 +153,84 @@ void main() {
     uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
     const uint v_base = seq_id * sv3 + head_id * sv1 + col;
 
-    FLOAT_TYPE v_next = FLOAT_TYPE(0.0);
+    FLOAT_TYPE v_cur[TB];
+    FLOAT_TYPE v_nxt[TB];
     if (n_tokens > 0) {
-        load_token(0, 0);
-        v_next = FLOAT_TYPE(data_v[v_base]);
+        const uint nt = min(TB, n_tokens);
+        load_block(0, nt, 0);
+        [[unroll]] for (uint j = 0; j < TB; j++) {
+            v_nxt[j] = j < nt ? FLOAT_TYPE(data_v[v_base + j * sv2]) : FLOAT_TYPE(0.0);
+        }
     }
     barrier();
 
-    for (uint t = 0; t < n_tokens; t++) {
-        const uint b = t & 1u;
-        const FLOAT_TYPE v_val = v_next;
+    uint b = 0;
+    for (uint t0 = 0; t0 < n_tokens; t0 += TB) {
+        const uint nt = min(TB, n_tokens - t0);
+        [[unroll]] for (uint j = 0; j < TB; j++) {
+            v_cur[j] = v_nxt[j];
+        }
 
         // other buffer is free: all reads of it ended before the last barrier
-        if (t + 1 < n_tokens) {
-            load_token(t + 1, b ^ 1u);
-            v_next = FLOAT_TYPE(data_v[v_base + (t + 1) * sv2]);
+        if (t0 + TB < n_tokens) {
+            const uint nt_next = min(TB, n_tokens - t0 - TB);
+            load_block(t0 + TB, nt_next, b ^ 1u);
+            [[unroll]] for (uint j = 0; j < TB; j++) {
+                v_nxt[j] = j < nt_next ? FLOAT_TYPE(data_v[v_base + (t0 + TB + j) * sv2]) : FLOAT_TYPE(0.0);
+            }
         }
 
-        const FLOAT_TYPE beta_val = beta_sh[b];
+        [[unroll]] for (uint j = 0; j < TB; j++) {
+            if (j >= nt) {
+                break;
+            }
+            const uint t = t0 + j;
+            const uint sh = b * TB + j;
+            const FLOAT_TYPE beta_val = beta_sh[sh];
 
-        FLOAT_TYPE k_reg[ROWS_PER_LANE];
-        FLOAT_TYPE q_reg[ROWS_PER_LANE];
-        FLOAT_TYPE g_exp[ROWS_PER_LANE];
-        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-            const uint i = r * LANES_PER_COLUMN + lane;
-            k_reg[r] = k_sh[b][i];
-            q_reg[r] = q_sh[b][i];
-            g_exp[r] = (KDA != 0) ? g_sh[b][i] : g_sh[b][0];
-        }
+            FLOAT_TYPE k_reg[ROWS_PER_LANE];
+            FLOAT_TYPE q_reg[ROWS_PER_LANE];
+            FLOAT_TYPE g_exp[ROWS_PER_LANE];
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                const uint i = r * LANES_PER_COLUMN + lane;
+                k_reg[r] = k_sh[sh * S_V + i];
+                q_reg[r] = q_sh[sh * S_V + i];
+                g_exp[r] = (KDA != 0) ? g_sh[sh * G_LEN + i] : g_sh[sh * G_LEN];
+            }
 
-        FLOAT_TYPE kv_shard = 0.0;
-        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-            kv_shard += g_exp[r] * s_shard[r] * k_reg[r];
-        }
-        FLOAT_TYPE kv_col = reduce_partial(kv_shard);
+            FLOAT_TYPE kv_shard = 0.0;
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                kv_shard += g_exp[r] * s_shard[r] * k_reg[r];
+            }
+            FLOAT_TYPE kv_col = reduce_partial(kv_shard);
 
-        FLOAT_TYPE delta_col = (v_val - kv_col) * beta_val;
+            FLOAT_TYPE delta_col = (v_cur[j] - kv_col) * beta_val;
 
-        FLOAT_TYPE attn_partial = 0.0;
-        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-            s_shard[r] = g_exp[r] * s_shard[r] + k_reg[r] * delta_col;
-            attn_partial += s_shard[r] * q_reg[r];
-        }
-        FLOAT_TYPE attn_col = reduce_partial(attn_partial);
+            FLOAT_TYPE attn_partial = 0.0;
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                s_shard[r] = g_exp[r] * s_shard[r] + k_reg[r] * delta_col;
+                attn_partial += s_shard[r] * q_reg[r];
+            }
+            FLOAT_TYPE attn_col = reduce_partial(attn_partial);
 
-        if (lane == 0) {
-            data_dst[attn_off + col] = attn_col * scale;
-        }
+            if (lane == 0) {
+                data_dst[attn_off + col] = attn_col * scale;
+            }
 
-        attn_off += S_V * H;
+            attn_off += S_V * H;
 
-        if (K > 1u) {
-            const int target_slot = int(n_tokens) - 1 - int(t);
-            if (target_slot >= 0 && target_slot < int(K)) {
-                const uint slot_base = s_off + uint(target_slot) * state_size_per_snap + state_out_base;
-                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                    data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+            if (K > 1u) {
+                const int target_slot = int(n_tokens) - 1 - int(t);
+                if (target_slot >= 0 && target_slot < int(K)) {
+                    const uint slot_base = s_off + uint(target_slot) * state_size_per_snap + state_out_base;
+                    [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                        data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+                    }
                 }
             }
         }
 
+        b ^= 1u;
         barrier();
     }
 

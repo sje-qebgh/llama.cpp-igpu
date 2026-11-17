@@ -4462,6 +4462,12 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             {"gated_delta_net_f32_d64",     "gated_delta_net_f32_d64_kda"},
             {"gated_delta_net_f32_d128",    "gated_delta_net_f32_d128_kda"},
         };
+        const char * gdn_long_names[][2] = {
+            {"gated_delta_net_f32_d16_long",  "gated_delta_net_f32_d16_kda_long"},
+            {"gated_delta_net_f32_d32_long",  "gated_delta_net_f32_d32_kda_long"},
+            {"gated_delta_net_f32_d64_long",  "gated_delta_net_f32_d64_kda_long"},
+            {"gated_delta_net_f32_d128_long", "gated_delta_net_f32_d128_kda_long"},
+        };
         for (uint32_t si = 0; si < 4; si++) {
             const uint32_t S_V = gdn_sizes[si];
             GGML_ASSERT(is_pow2(S_V));
@@ -4534,22 +4540,42 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 }
             }
 
+            bool gdn_skq = false;
             if (gdn_nsg > 1) {
                 const std::array<uint32_t, 3> wg_denoms = {1u, 1u, cols_per_wg * gdn_nsg};
+                // tokens per shared memory block (one barrier per block), limited by shared memory:
+                // 2 buffers x TB tokens x (k, q, g, beta). On Xe2, 8 helps calls of up to 1024 tokens; with more
+                // tokens per call it is slower than 1, so those use the _long pipeline (see op_get_pipeline).
+                // Not measured on other Intel GPUs yet: 1 there. GGML_VK_GDN_TB overrides it.
+                uint32_t gdn_tb_req = device->architecture == vk_device_architecture::INTEL_XE2 ? 8u : 1u;
+                if (const char * e = getenv("GGML_VK_GDN_TB")) {
+                    gdn_tb_req = (uint32_t) std::max(1, atoi(e));
+                }
+                auto gdn_tb = [&](uint32_t want, uint32_t kda) {
+                    const uint32_t g_len = kda ? S_V : 1u;
+                    while (want > 1 && 2 * want * (2 * S_V + g_len + 1) * sizeof(float) > device->properties.limits.maxComputeSharedMemorySize) {
+                        want >>= 1;
+                    }
+                    return want;
+                };
                 const size_t skq_len = use_clustered_reduce ? gated_delta_net_skq_f32_len : gated_delta_net_skq_f32_nocluster_len;
                 const void * skq_data = use_clustered_reduce ? (const void *)gated_delta_net_skq_f32_data : (const void *)gated_delta_net_skq_f32_nocluster_data;
                 for (uint32_t kda = 0; kda < 2; kda++) {
-                    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
+                    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda][0],
                         gdn_names[si][kda], skq_len, skq_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
-                        wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column, gdn_nsg, gdn_subgroup_size * gdn_nsg}, 1, true, true, gdn_subgroup_size);
+                        wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column, gdn_nsg, gdn_subgroup_size * gdn_nsg, gdn_tb(gdn_tb_req, kda)}, 1, true, true, gdn_subgroup_size);
+                    ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_long[si][kda],
+                        gdn_long_names[si][kda], skq_len, skq_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
+                        wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column, gdn_nsg, gdn_subgroup_size * gdn_nsg, 1u}, 1, true, true, gdn_subgroup_size);
                 }
-                continue;
+                // the replay (rep = 1) pipelines below stay on the generic shader
+                gdn_skq = true;
             }
 
             const std::array<uint32_t, 3> wg_denoms = {1u, 1u, cols_per_wg};
 
             for (uint32_t kda = 0; kda < 2; kda++) {
-                for (uint32_t rep = 0; rep < 2; rep++) {
+                for (uint32_t rep = gdn_skq ? 1 : 0; rep < 2; rep++) {
                     const std::string name = std::string(gdn_names[si][kda]) + (rep ? "_rep" : "");
                     ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda][rep],
                         name.c_str(), gdn_len, gdn_data, "main", 11, sizeof(vk_op_gated_delta_net_push_constants),
@@ -10799,6 +10825,9 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 case 64:  si = 2; break;
                 case 128: si = 3; break;
                 default: return nullptr;
+            }
+            if (!rep && dst->src[2]->ne[2] > 1024 && ctx->device->pipeline_gated_delta_net_long[si][kda]) {
+                return ctx->device->pipeline_gated_delta_net_long[si][kda];
             }
             return ctx->device->pipeline_gated_delta_net[si][kda][rep];
         }
