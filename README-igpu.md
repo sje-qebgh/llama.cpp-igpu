@@ -20,7 +20,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
-| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_S, IQ4_XS, and IQ3_S for k < 2048; fp16 for the rest (upstream: fp16 for every type) | from forced-MMVQ runs on Meteor Lake; default not re-measured yet |
+| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_S, IQ4_XS, and IQ3_S for k < 2048; fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
@@ -103,6 +103,17 @@ Same machine and builds, tg128, 2 alternating rounds of `-r 3`. The new per-type
 Per-op timings show which types win: Q8_0, MXFP4 and IQ4_NL mat-vecs are slower with MMVQ on this GPU, so the
 per-type default above keeps them on fp16. GPU time per token is at or above wall time, so submission is not the limit.
 
+The per-type default, measured later on the same machine (build 67e7220, other session, so compare within the table only):
+it matches the faster of the two other settings for every model.
+
+| Model | fork default (per type) | `GGML_VK_XE1_MMVQ_LEGACY=1` (fp16) | `GGML_VK_FORCE_MMVQ=1` |
+|---|---|---|---|
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 26.3 (25.2-27.4) | 17.0 | 26.9 (26.6-27.3) |
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 21.0 (20.4-21.6) | 15.3 | 21.3 (21.0-21.7) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 19.0 (18.8-19.3) | 14.4 | 19.2 (18.6-19.7) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 14.1 | 14.3 | 12.7 |
+| gpt-oss-20b UD-Q4_K_XL | 20.6 | 20.5 | 16.1 |
+
 ### What the profiles say (Lunar Lake, tg)
 
 - Large dense mat-vecs (lm_head, big FFNs) reach about 100 GB/s of the ~136 GB/s theoretical bandwidth.
@@ -176,9 +187,10 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   about 0.6-0.8 ms per token on Lunar Lake. Writing it straight into the cache needs a change to the op.
 - IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode.
 - Meteor Lake: measure the new IQ2_XXS / IQ2_XS / IQ3_XXS MMVQ (off by default there, `GGML_VK_FORCE_MMVQ=1`).
-- K-quant and IQ3_S MoE prefill on Meteor Lake: Qwen3-Coder UD-Q2_K_XL only reaches 35-50 t/s (IQ2_XXS: 150-200).
-  Suspected register spills of the K-quant tiles at SIMD16; test with the MMQ knobs above.
-- Re-measure Meteor Lake tg with the per-type MMVQ default.
+- K-quant MoE prefill on Meteor Lake: Qwen3-Coder UD-Q2_K_XL reaches 33-37 t/s at pp512 and 49-56 at pp2048, with the
+  MoE mat-mul at 200-280 GFLOPS for Q2_K / Q3_K / Q4_K (IQ4_NL in Gemma-4: about 900, IQ2_S in Qwen3.6: about 380).
+  SIMD8 for these pipelines and other MoE tiles (`GGML_VK_SUBGROUP_OVERRIDE`, `GGML_VK_WT_ID_INT_K_*`) did not change
+  it (pp2048 46-49 against 49 for the default, SIMD32 39), so register spills at SIMD16 are not the cause. Next: per-shape profile.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
 
 ## Keeping up with upstream
