@@ -13,6 +13,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, IQ2_S | integer dot (q8_1) MMQ shaders for mul_mat and mul_mat_id | measured |
 | Prefill, IQ4_NL | integer dot MMQ shaders (upstream only had them on coopmat GPUs) | measured |
 | Prefill, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot MMQ shaders | measured (Qwen3.6 UD-IQ2_XXS) |
+| Prefill, MoE (`mul_mat_id` integer dot MMQ) | a tile covers up to BN rows of one expert; columns past the rows the expert has are no longer loaded or multiplied. With 128-256 experts most of a 64-column tile is empty at pp512 | measured on Meteor Lake |
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
@@ -48,6 +49,18 @@ Core Ultra 5 135H, driver 32.0.101.8991, upstream 9fba51d vs this fork b9f1952, 
 | Qwen3-Coder-30B-A3B UD-Q2_K_XL (K-quant experts) | 35.1 / 35.1 | 49.8 / 49.4 |
 
 All `test-backend-ops` checks pass on this GPU (new IQ MMQ types, `GATED_DELTA_NET`, MMVQ forced on).
+
+MoE prefill, skipping the unused columns of a tile (later session; the machine was slower than above, so compare
+within the table only). `-fa 0 -r 1`, 2 alternating runs (mean):
+
+| Model | pp512 before / after | pp2048 before / after |
+|---|---|---|
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL (128 experts) | 31.6 / 67.3 (+113%) | 44.3 / 55.0 (+24%) |
+| Qwen3.6-35B-A3B UD-IQ3_S (256 experts) | 80.0 / 145.5 (+82%) | 122.7 / 153.2 (+25%) |
+
+Skipping only the dot products gave about half of this (59.6 and 121.8 t/s at pp512). Forcing the smaller tile
+(32 columns instead of 64) instead was faster for Q2_K (pp512 52.5) but slower for every other model tested
+(Qwen3.6 IQ3_S / IQ2_XXS -20 to -34%, gpt-oss-20b -11%), and slower than column skipping with the 64-column tile.
 
 ### Token generation, Lunar Lake
 
@@ -187,10 +200,11 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   about 0.6-0.8 ms per token on Lunar Lake. Writing it straight into the cache needs a change to the op.
 - IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode.
 - Meteor Lake: measure the new IQ2_XXS / IQ2_XS / IQ3_XXS MMVQ (off by default there, `GGML_VK_FORCE_MMVQ=1`).
-- K-quant MoE prefill on Meteor Lake: Qwen3-Coder UD-Q2_K_XL reaches 33-37 t/s at pp512 and 49-56 at pp2048, with the
-  MoE mat-mul at 200-280 GFLOPS for Q2_K / Q3_K / Q4_K (IQ4_NL in Gemma-4: about 900, IQ2_S in Qwen3.6: about 380).
-  SIMD8 for these pipelines and other MoE tiles (`GGML_VK_SUBGROUP_OVERRIDE`, `GGML_VK_WT_ID_INT_K_*`) did not change
-  it (pp2048 46-49 against 49 for the default, SIMD32 39), so register spills at SIMD16 are not the cause. Next: per-shape profile.
+- MoE prefill on Meteor Lake: the slow Qwen3-Coder UD-Q2_K_XL prefill (33-37 t/s at pp512) came from mostly empty
+  MoE tiles, not from the K-quant decode: dense Q4_K mat-mul ran at 2000-2600 GFLOPS while the MoE ones ran at 100-290.
+  SIMD8 and other MoE tiles did not help. Column skipping (above) fixes most of it; the float / coopmat shader
+  (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not. Still open: a check of
+  Gemma-4 / gpt-oss with it.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
 
 ## Keeping up with upstream
