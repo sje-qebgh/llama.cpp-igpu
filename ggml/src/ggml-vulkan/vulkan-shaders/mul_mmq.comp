@@ -209,6 +209,10 @@ void main() {
             const uint buf_ib = loadc_b + l;
 
 #ifdef MUL_MAT_ID
+            // columns past the rows of this expert in the tile are never written out
+            if (buf_ib >= _ne1) {
+                continue;
+            }
             const u16vec2 row_idx = row_ids[buf_ib];
             const uint ib = pos_b_ib + row_idx.y * p.batch_stride_b / BK + (row_idx.x % p.ne11) * p.stride_b / BK;
 #else
@@ -238,6 +242,12 @@ void main() {
             }
 
             [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
+#ifdef MUL_MAT_ID
+                // uniform over the subgroup: skip column blocks with no rows of this expert
+                if (warp_c * WN + wsic * WSUBN >= _ne1) {
+                    break;
+                }
+#endif
                 [[unroll]] for (uint cc = 0; cc < TN; cc++) {
                     const uint ib = k_step * BN + warp_c * WN + wsic * WSUBN + tiwc * TN + cc;
                     block_b_to_registers(ib);
