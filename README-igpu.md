@@ -16,6 +16,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, MoE (`mul_mat_id` integer dot MMQ) | a tile covers up to BN rows of one expert; columns past the rows the expert has are no longer loaded or multiplied. With 128-256 experts most of a 64-column tile is empty at pp512 | measured on Meteor Lake |
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
+| Qwen3.5/3.6 prefill, Xe2 | that variant loads k/q/g/beta of 8 tokens per shared memory block, so the workgroup waits once per 8 tokens instead of every token; calls with more than 1024 tokens keep 1 token per block (slower with 8). `GGML_VK_GDN_TB=N` sets the block size | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S / IQ4_NL | integer dot mat-vec (MMVQ) shaders, incl. MoE (`mul_mat_vec_id`) | measured on Lunar Lake |
 | Token generation, IQ2_XXS / IQ2_XS / IQ3_XXS | integer dot mat-vec (MMVQ) shaders, incl. MoE; grid from the storage buffer like IQ2_S / IQ3_S | measured on Lunar Lake |
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
@@ -61,6 +62,24 @@ within the table only). `-fa 0 -r 1`, 2 alternating runs (mean):
 Skipping only the dot products gave about half of this (59.6 and 121.8 t/s at pp512). Forcing the smaller tile
 (32 columns instead of 64) instead was faster for Q2_K (pp512 52.5) but slower for every other model tested
 (Qwen3.6 IQ3_S / IQ2_XXS -20 to -34%, gpt-oss-20b -11%), and slower than column skipping with the 64-column tile.
+
+### Prefill, Lunar Lake
+
+Qwen3.6-35B-A3B UD-IQ3_S, Gated DeltaNet tokens per block (`GGML_VK_GDN_TB`), t/s, 2 alternating runs of `-r 1`,
+flash attention on (default). llama.cpp splits prompts into ubatches of 512 tokens by default (`-ub`).
+
+| Tokens per block | pp512 | pp2048 `-ub 512` | pp2048 `-ub 1024` | pp2048 `-ub 2048` |
+|---|---|---|---|---|
+| 1 (before) | 587.8 | 597.2 | 692.9 | 670.6 |
+| 4 | 625.6 | 618.3 | 690.7 | 580.1 |
+| 8 (new default up to 1024 tokens per call) | 639.9 (+9%) | 630.8 (+6%) | 710.6 | 565.3 |
+
+GATED_DELTA_NET per call at 512 tokens: 4.67 ms (1 token per block) -> 3.74 ms (8). With 2048 tokens per call it
+gets slower (28.0 -> 45.8 ms), so calls above 1024 tokens keep 1 token per block. tg128 does not change (32.1 / 32.1).
+`-ub 1024` is the fastest ubatch size here for long prompts (about +13% over the default 512).
+
+The MoE prefill tile (`mul_mm.comp`, coopmat) was checked too: the default (large, 128 columns) is the fastest for
+Qwen3.6 IQ3_S, Gemma-4 IQ4_NL and gpt-oss-20b; forcing 32 or 64 columns is 20-70% slower.
 
 ### Token generation, Lunar Lake
 
@@ -164,6 +183,7 @@ it matches the faster of the two other settings for every model.
   BM/BN must stay the same; invalid shapes are ignored with a warning. `GGML_VK_WT_PRINT=1` prints the tiles in use.
 - `GGML_VK_SUBGROUP_OVERRIDE="matmul=16,!iq3_s_q8_1=8"`: subgroup size by pipeline name substring; `!` also replaces a
   size the backend already pins. Check results with `test-backend-ops` under the same setting.
+- `GGML_VK_GDN_TB=N`: Gated DeltaNet (Intel variant) tokens per shared memory block for calls of up to 1024 tokens (Xe2 default 8, others 1)
 - `GGML_VK_MMVQ_IQ_SHMEM=1`: IQ2/IQ3 MMVQ copy the (bit-packed) grid table into shared memory per workgroup instead of reading it from a storage buffer
 
 PowerShell keeps environment variables for the whole session: remove them (`Remove-Item Env:NAME`) before
@@ -208,6 +228,8 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not. Still open: a check of
   Gemma-4 / gpt-oss with it.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
+
+- Meteor Lake: measure `GGML_VK_GDN_TB=8` (Gated DeltaNet prefill), on by default only on Xe2 so far.
 
 ### Not planned
 

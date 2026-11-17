@@ -1046,6 +1046,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_gated_delta_net_cm;
     vk_pipeline pipeline_gated_delta_net_cm_v32;
     vk_pipeline pipeline_gated_delta_net_cm_v128;
+    // Intel: one token per shared memory block, for calls with many tokens (null elsewhere)
+    vk_pipeline pipeline_gated_delta_net_long[4][2];
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
