@@ -198,7 +198,9 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 
 - Qwen3.5/3.6: the new recurrent state is still written to the op output and then copied into the cache (`CPY`),
   about 0.6-0.8 ms per token on Lunar Lake. Writing it straight into the cache needs a change to the op.
-- IQ2_S / IQ3_S expert mat-vecs: fewer instructions per weight in the decode.
+- IQ2_S / IQ3_S expert mat-vecs: issue the next grid index load before the current grid lookup, to break the chain
+  of dependent loads (the largest part of the decode cost in the probe above). Upper bound about 1.5% of tg on Lunar Lake
+  (IQ2_S gate/up 50 us per call at 4 rows, about 44 us with no decode at all).
 - Meteor Lake: measure the new IQ2_XXS / IQ2_XS / IQ3_XXS MMVQ (off by default there, `GGML_VK_FORCE_MMVQ=1`).
 - MoE prefill on Meteor Lake: the slow Qwen3-Coder UD-Q2_K_XL prefill (33-37 t/s at pp512) came from mostly empty
   MoE tiles, not from the K-quant decode: dense Q4_K mat-mul ran at 2000-2600 GFLOPS while the MoE ones ran at 100-290.
@@ -206,6 +208,14 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not. Still open: a check of
   Gemma-4 / gpt-oss with it.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
+
+### Not planned
+
+- Repacking IQ2/IQ3 blocks at load time into an MMVQ-friendly layout (e.g. the 10-bit IQ2_S grid index in one word
+  instead of split over `qs` and `qh`). The Vulkan backend has no repack buffer type, so it would touch tensor upload and
+  read-back, size computation, the mmap path and every other shader that reads these blocks, and make rebases harder.
+  It only removes the index assembly (about 8 us of 60 per IQ2_S gate/up call in the probe), inside the same
+  1.5% upper bound as above.
 
 ## Keeping up with upstream
 
