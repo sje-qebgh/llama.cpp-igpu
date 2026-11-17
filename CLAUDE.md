@@ -25,4 +25,5 @@ AGENTS.md and CONTRIBUTING.md are upstream's rules for contributions to ggml-org
 - Speed is measured by the user on Intel iGPUs with the Windows driver: Meteor Lake (Xe-LPG, no matrix cores, DP4a) and Lunar Lake (Xe2, XMX). Give the user a PowerShell script or exact commands.
 - Run-to-run noise is 5-10%. Compare settings in alternating runs, several rounds each.
 - PowerShell keeps environment variables: clear all `GGML_VK_*` before a baseline run.
+- Do not compare quant types by the t/s of different models (experts, sizes and shapes differ). Compare within one model: per-op times by shape, dense vs MoE.
 - `GGML_VK_PERF_LOGGER=1` gives per-op times but slows down the run; compare t/s only without it. Its `MUL_MAT_ADD` lines sometimes jump 2-3x and do not match wall time.
