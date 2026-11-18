@@ -7924,12 +7924,15 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             //   Q2_K 0.30, Q3_K 0.67, Q4_K 0.73-0.89, Q5_K 0.94, IQ2_S 0.14-0.33, IQ4_XS 0.88,
             //   IQ3_S 0.71-0.75 at k=512 but 1.09 at k=2816,
             //   Q8_0 1.12-1.33, MXFP4 1.39, IQ4_NL 1.18, Q6_K 1.03-1.06, Q5_0 0.98.
+            // IQ2_XXS: Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 -> 19.70 t/s with GGML_VK_FORCE_MMVQ=1 (4 rounds).
+            // IQ2_XS / IQ3_XXS are not measured here yet.
             // GGML_VK_XE1_MMVQ_LEGACY=1 restores the previous behavior (fp16 for every type).
             switch (src0_type) {
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_Q4_K:
             case GGML_TYPE_Q5_K:
+            case GGML_TYPE_IQ2_XXS:
             case GGML_TYPE_IQ2_S:
             case GGML_TYPE_IQ4_XS:
                 return true;
