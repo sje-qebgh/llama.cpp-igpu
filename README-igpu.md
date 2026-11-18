@@ -22,7 +22,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
-| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_S, IQ4_XS, and IQ3_S for k < 2048; fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
+| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_XXS, IQ2_S, IQ4_XS, and IQ3_S for k < 2048; fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
@@ -232,7 +232,8 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 - IQ2_S / IQ3_S expert mat-vecs: issue the next grid index load before the current grid lookup, to break the chain
   of dependent loads (the largest part of the decode cost in the probe above). Upper bound about 1.5% of tg on Lunar Lake
   (IQ2_S gate/up 50 us per call at 4 rows, about 44 us with no decode at all).
-- Meteor Lake: measure the new IQ2_XXS / IQ2_XS / IQ3_XXS MMVQ (off by default there, `GGML_VK_FORCE_MMVQ=1`).
+- Meteor Lake: IQ2_XS / IQ3_XXS MMVQ not measured (off by default there, `GGML_VK_FORCE_MMVQ=1`). IQ2_XXS is on:
+  Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 (fp16 for IQ2_XXS) vs 19.70 t/s (MMVQ forced), 4 alternating rounds, f32e39e.
 - MoE prefill on Meteor Lake: the slow Qwen3-Coder UD-Q2_K_XL prefill (33-37 t/s at pp512) came from mostly empty
   MoE tiles, not from the K-quant decode: dense Q4_K mat-mul ran at 2000-2600 GFLOPS while the MoE ones ran at 100-290.
   SIMD8 and other MoE tiles did not help. Column skipping (above) fixes most of it; the float / coopmat shader
