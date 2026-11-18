@@ -9798,9 +9798,16 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     bool xe_fa_opt = false;
     bool xe_fa_use_2phases = false;
     bool xe_fa_supported_platform = vk_dev->xe_fa_support && vk_dev->properties.deviceID != 0xFD80 && vk_dev->properties.deviceID != 0xFD81;
+    // A quantized K/V cache converted to f16 for prefill (use_dequant_kv) can use the Xe kernels too: the copy is
+    // contiguous [HS, KV, NH], at offset 0 and k_sz of prealloc_x.
+    static const bool xe_fa_no_dequant = getenv("GGML_VK_XE_FA_NO_DEQUANT") != nullptr;
+    const bool xe_fa_dequant_kv = use_dequant_kv && !kv_raw_strided && !xe_fa_no_dequant &&
+                                  k_type_eff == GGML_TYPE_F16 && v_type_eff == GGML_TYPE_F16 &&
+                                  (HSK % 8) == 0 && (HSV % 8) == 0 && ((uint64_t) ggml_nelements(k) * sizeof(ggml_fp16_t)) % 16 == 0;
     bool xe_fa_supported_usage = neq0 % 32 == 0 && nev0 % 16 == 0 && mask != nullptr && !use_sparse && max_bias == 0.0f && logit_softcap == 0.0f &&
-                                 tensor_aligned_with(k, 16u) && tensor_aligned_with(v, 16u);
-    bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+                                 (xe_fa_dequant_kv || (tensor_aligned_with(k, 16u) && tensor_aligned_with(v, 16u)));
+    bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 &&
+                                 ((k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) || xe_fa_dequant_kv) &&
                                  mask != nullptr && mask->type == GGML_TYPE_F16;
     xe_fa_opt = xe_fa_supported_platform && xe_fa_supported_usage && xe_fa_supported_dtype;
     std::pair<vk_pipeline, vk_pipeline> xe_fa_pipeline_dual_phases = { nullptr , nullptr };
@@ -10135,11 +10142,14 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     if (xe_fa_opt) {
         uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
-        uint32_t head_stride_k = uint32_t(nbk2 / ggml_type_size(k->type));
-        uint32_t head_stride_v = uint32_t(nbv2 / ggml_type_size(v->type));
+        // nb*_eff are the strides of the f16 copy when K/V were converted (use_dequant_kv), else nb*
+        const size_t k_ts = use_dequant_kv ? sizeof(ggml_fp16_t) : ggml_type_size(k->type);
+        const size_t v_ts = use_dequant_kv ? sizeof(ggml_fp16_t) : ggml_type_size(v->type);
+        uint32_t head_stride_k = uint32_t(nbk2_eff / k_ts);
+        uint32_t head_stride_v = uint32_t(nbv2_eff / v_ts);
         uint32_t batch_stride_q = uint32_t(nbq3 / ggml_type_size(q->type));
-        uint32_t batch_stride_k = uint32_t(nbk3 / ggml_type_size(k->type));
-        uint32_t batch_stride_v = uint32_t(nbv3 / ggml_type_size(v->type));
+        uint32_t batch_stride_k = uint32_t(nbk3_eff / k_ts);
+        uint32_t batch_stride_v = uint32_t(nbv3_eff / v_ts);
         uint32_t batch_stride_o = uint32_t(nb3 / ggml_type_size(dst->type));
 
         vk_xe_fa_push_constants pc_xe_fa = { (uint32_t)neq1, (uint32_t)neq2, (uint32_t)neq3,
