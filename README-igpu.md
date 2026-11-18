@@ -78,6 +78,15 @@ GATED_DELTA_NET per call at 512 tokens: 4.67 ms (1 token per block) -> 3.74 ms (
 gets slower (28.0 -> 45.8 ms), so calls above 1024 tokens keep 1 token per block. tg128 does not change (32.1 / 32.1).
 `-ub 1024` is the fastest ubatch size here for long prompts (about +13% over the default 512).
 
+On Meteor Lake the same blocks do not help (t/s, same test, `GGML_VK_GDN_TB`; pp512 at TB 1 had one slow run):
+
+| Tokens per block | pp512 | pp2048 `-ub 512` | pp2048 `-ub 1024` | pp2048 `-ub 2048` |
+|---|---|---|---|---|
+| 1 (default there) | 137.5 | 142.3 | 154.7 | 159.6 |
+| 2 | 153.0 | 139.1 | 151.0 | 147.6 |
+| 4 | 149.2 | 142.1 | 150.3 | 152.0 |
+| 8 | 132.9 | 138.2 | 140.3 | 146.9 |
+
 The MoE prefill tile (`mul_mm.comp`, coopmat) was checked too: the default (large, 128 columns) is the fastest for
 Qwen3.6 IQ3_S, Gemma-4 IQ4_NL and gpt-oss-20b; forcing 32 or 64 columns is 20-70% slower.
 
@@ -191,8 +200,10 @@ measuring a baseline.
 
 ## Recommended settings on iGPUs
 
-- MoE models: use a large ubatch, e.g. `-b 4096 -ub 4096` (Qwen3.6-35B-A3B) or `-b 2048 -ub 2048` (Gemma-4 26B-A4B).
-  More tokens per batch means more tokens per expert and better use of each matmul tile.
+- MoE models: use a larger ubatch than the default 512 for long prompts. More tokens per batch means more tokens
+  per expert and better use of each matmul tile. Measured with Qwen3.6-35B-A3B UD-IQ3_S, pp2048 (5095e8b):
+  Lunar Lake `-ub 512` 631, `-ub 1024` 711, `-ub 2048` 671 t/s; Meteor Lake 142, 155, 160 t/s.
+  So `-b 2048 -ub 1024` on Lunar Lake, `-b 2048 -ub 2048` on Meteor Lake (Gemma-4 26B-A4B: `-ub 2048` measured earlier).
 - Gemma-4 on Meteor Lake: `-fa off` was faster than flash attention (no KV cache quantization then).
 
 ## Correctness
@@ -229,7 +240,8 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   Gemma-4 / gpt-oss with it.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
 
-- Meteor Lake: measure `GGML_VK_GDN_TB=8` (Gated DeltaNet prefill), on by default only on Xe2 so far.
+- Gated DeltaNet prefill with more than 1024 tokens per call: 8 tokens per block is slower there (Lunar Lake),
+  the cause is not known yet.
 
 ### Not planned
 
