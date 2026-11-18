@@ -58,6 +58,12 @@ within the table only). `-fa 0 -r 1`, 2 alternating runs (mean):
 |---|---|---|
 | Qwen3-Coder-30B-A3B UD-Q2_K_XL (128 experts) | 31.6 / 67.3 (+113%) | 44.3 / 55.0 (+24%) |
 | Qwen3.6-35B-A3B UD-IQ3_S (256 experts) | 80.0 / 145.5 (+82%) | 122.7 / 153.2 (+25%) |
+| Gemma-4 26B-A4B UD-IQ4_NL (128 experts) | 87.2 / 138.5 (+59%) | 92.0 / 110.5 (+20%) |
+| gpt-oss-20b UD-Q4_K_XL (32 experts) | 203.4 / 223.2 (+10%) | 170.9 / 184.0 (+8%) |
+
+The Gemma-4 and gpt-oss rows are not alternating: "before" is from the day before (4 runs), "after" is 3 runs of
+`-r 2` with 65e05a0, and the Windows power mode may have differed. Differences of 10% are within that noise; the
+Gemma-4 gain is not. As expected, few experts (full tiles) gain little.
 
 Skipping only the dot products gave about half of this (59.6 and 121.8 t/s at pp512). Forcing the smaller tile
 (32 columns instead of 64) instead was faster for Q2_K (pp512 52.5) but slower for every other model tested
@@ -237,8 +243,7 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 - MoE prefill on Meteor Lake: the slow Qwen3-Coder UD-Q2_K_XL prefill (33-37 t/s at pp512) came from mostly empty
   MoE tiles, not from the K-quant decode: dense Q4_K mat-mul ran at 2000-2600 GFLOPS while the MoE ones ran at 100-290.
   SIMD8 and other MoE tiles did not help. Column skipping (above) fixes most of it; the float / coopmat shader
-  (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not. Still open: a check of
-  Gemma-4 / gpt-oss with it.
+  (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
 
 - Gated DeltaNet prefill with more than 1024 tokens per call: 8 tokens per block is slower there (Lunar Lake),
