@@ -101,6 +101,17 @@ Prefill with a q8_0 KV cache (`-ctk q8_0 -ctv q8_0`), Qwen3.6-35B-A3B UD-IQ3_S, 
 f16 cache 472, q8_0 before 167, q8_0 now 445 t/s. One flash attention call (head size 256, 2 KV heads x 8, KV 16384,
 512 queries, `test-backend-ops perf`): f16 24.0 ms, q8_0 before 237-298 ms, now 25.5 ms (the f16 conversion).
 
+Other models, pp512 at 16k context with the fix (`-ub 1024 -r 1`, single runs, so about 10% noise):
+
+| Model | f16 cache | q8_0 cache |
+|---|---|---|
+| Gemma-4 26B-A4B UD-IQ4_NL | 411.2 | 453.2 |
+| gpt-oss-20b UD-Q4_K_XL | 662.9 | 621.1 |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 294.4 | 332.1 |
+| Qwen3-Coder-30B-A3B UD-Q3_K_XL | 326.7 | 295.6 |
+
+Before the fix q8_0 prefill at 8k context was 2-3x slower than f16 for Gemma-4 and gpt-oss (172 vs 561, 310 vs 793).
+
 ### Token generation, Lunar Lake
 
 Intel Core Ultra (Lunar Lake), Arc 140V, LPDDR5X, Windows, `llama-bench -p 0 -n 128 -r 3`.
