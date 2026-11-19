@@ -3,6 +3,7 @@
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
@@ -12,8 +13,10 @@
 layout (local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer PV4 {f16vec4 data_pv4[];};
+#if !defined(DATA_KV_Q8_0)
 layout (binding = 1) readonly buffer V {float16_t data_v[];};
-layout (binding = 1) readonly buffer VV4 {f16vec4 data_vv4[];};
+#endif
+#include "flash_attn_xe_kv.glsl"
 layout (binding = 2) readonly buffer MAX {float data_max[];};
 layout (binding = 3) readonly buffer S {float data_s[];};
 layout (binding = 4) buffer OV4 {vec4 data_ov4[];};
@@ -97,6 +100,24 @@ const uint maxsh_stride = p_reduce / 4;
 const uint sg_per_line = p_per_loop / SubGroupSize / 4;
 const bool seq_boundary_check = (Flags & UNALIGNED_SEQ_LEN_BIT) != 0;
 
+#if defined(DATA_KV_Q8_0)
+// Quantized V cannot be fed to coopMatLoad directly, so each subgroup dequantizes
+// its TK x Bc V tile into a private shared-memory slot laid out as omat_col
+// column-major TM x TK tiles (same layout as the OOB staging below). The slot
+// sits after both P ping-pong buffers so it never aliases live data, and the
+// next tile is prefetched into registers while the current one is multiplied.
+const uint vq_tile_v4 = TM * TK / 4;
+const uint vq_sg_v4 = omat_col * vq_tile_v4;
+const uint vq_loads = (vq_sg_v4 + SubGroupSize - 1) / SubGroupSize;
+const uint vq_row_v4 = Bc / 4;
+const uint vqsh_base_v4 = (psh_base + 2 * psh_size) / 4;
+#define SLM_POOL_SIZE_VQ_V4 (vqsh_base_v4 + sg_count * vq_sg_v4)
+#else
+#define SLM_POOL_SIZE_VQ_V4 0
+#endif
+
+#define SLM_POOL_SIZE_F16V4_BASE ((SLM_POOL_SIZE_GLOBAL_MAX + SLM_POOL_SIZE_SOFTMAX_SUM + SLM_POOL_SIZE_MAX * 2) / 2 + SLM_POOL_SIZE_OOB_STAGING)
+
 shared sh_block {
     float F32sh[SLM_POOL_SIZE_GLOBAL_MAX + SLM_POOL_SIZE_SOFTMAX_SUM + SLM_POOL_SIZE_O];
 } F32Poolsh;
@@ -106,8 +127,35 @@ shared shf16_alias {
 } F16Poolsh;
 
 shared shf16v4_alias {
-    f16vec4 F16V4sh[(SLM_POOL_SIZE_GLOBAL_MAX + SLM_POOL_SIZE_SOFTMAX_SUM + SLM_POOL_SIZE_MAX * 2) / 2 + SLM_POOL_SIZE_OOB_STAGING];
+    f16vec4 F16V4sh[SLM_POOL_SIZE_VQ_V4 > SLM_POOL_SIZE_F16V4_BASE ? SLM_POOL_SIZE_VQ_V4 : SLM_POOL_SIZE_F16V4_BASE];
 } F16V4Poolsh;
+
+#if defined(DATA_KV_Q8_0)
+// Load (and dequantize) this subgroup's TK x Bc V tile starting at element offset v_off.
+void load_vq_tile(const uint v_off, const uint v_dim, const uint lane, inout f16vec4 regs[vq_loads]) {
+    [[unroll]] for (uint idx = 0; idx < vq_loads; ++idx) {
+        const uint f = idx * SubGroupSize + lane;
+        if (vq_sg_v4 % SubGroupSize == 0 || f < vq_sg_v4) {
+            const uint r = f / vq_row_v4;
+            const uint colv = f % vq_row_v4;
+            regs[idx] = XE_LOAD_KV4((v_off + r * v_dim) / 4 + colv);
+        }
+    }
+}
+
+void store_vq_tile(const uint sg, const uint lane, const f16vec4 regs[vq_loads]) {
+    [[unroll]] for (uint idx = 0; idx < vq_loads; ++idx) {
+        const uint f = idx * SubGroupSize + lane;
+        if (vq_sg_v4 % SubGroupSize == 0 || f < vq_sg_v4) {
+            const uint r = f / vq_row_v4;
+            const uint colv = f % vq_row_v4;
+            const uint c = colv / (TM / 4);
+            const uint cc = colv % (TM / 4);
+            F16V4Poolsh.F16V4sh[vqsh_base_v4 + sg * vq_sg_v4 + c * vq_tile_v4 + r * (TM / 4) + cc] = regs[idx];
+        }
+    }
+}
+#endif
 
 void main() {
     const uint lane = gl_SubgroupInvocationID;
@@ -258,6 +306,13 @@ void main() {
     }
 
     const uint loop_count = seq_boundary_check ? ((p.nek1 + p_per_loop - 1) / p_per_loop - 1) : (p.nek1 / p_per_loop);
+
+#if defined(DATA_KV_Q8_0)
+    f16vec4 vq_regs[vq_loads];
+    if (loop_count > 0) {
+        load_vq_tile(v_offset, v_dim, lane, vq_regs);
+    }
+#endif
     uint sh_pingpong_load = 0;
     uint sh_pingpong_store = 0;
 
@@ -292,9 +347,20 @@ void main() {
         {
             const uint coord_p = psh_base + sh_pingpong_load * psh_size + sg * TK;
             coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> VMat[omat_col];
+#if defined(DATA_KV_Q8_0)
+            store_vq_tile(sg, lane, vq_regs);
+            subgroupBarrier();
+            [[unroll]] for (uint c = 0; c < omat_col; ++c) {
+                coopMatLoad(VMat[c], F16V4Poolsh.F16V4sh, vqsh_base_v4 + sg * vq_sg_v4 + c * vq_tile_v4, TM / 4, gl_CooperativeMatrixLayoutColumnMajor);
+            }
+            if (loop + 1 < loop_count) {
+                load_vq_tile(v_offset + p_per_loop * v_dim, v_dim, lane, vq_regs);
+            }
+#else
             [[unroll]] for (uint c = 0; c < omat_col; ++c) {
                 coopMatLoad(VMat[c], data_v, v_offset + TM * c, v_dim, gl_CooperativeMatrixLayoutColumnMajor);
             }
+#endif
             [[unroll]] for (uint r = 0; r < omat_row; ++r) {
                 coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> PMat;
                 coopMatLoad(PMat, F16Poolsh.F16sh, coord_p + r * TN * p_per_loop, p_per_loop, gl_CooperativeMatrixLayoutColumnMajor);
@@ -346,7 +412,7 @@ void main() {
                 const uint col_idx = vv4_idx % (TM / 4);
                 const uint vv4_offset = v_global_offset + row_idx * p.nbv1 / 4 + c * TM / 4 + col_idx;
 
-                f16vec4 vv4_temp = (v_global_coord_base + row_idx < p.nek1) ? data_vv4[vv4_offset] : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
+                f16vec4 vv4_temp = (v_global_coord_base + row_idx < p.nek1) ? XE_LOAD_KV4(vv4_offset) : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                 F16V4Poolsh.F16V4sh[vv4sh_base + vv4_idx] = vv4_temp;
             }
 
