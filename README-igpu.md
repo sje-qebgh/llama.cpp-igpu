@@ -31,6 +31,12 @@ Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S,
 
 ## Measured results
 
+![Meteor Lake: upstream vs this fork](docs/igpu/igpu-meteor-lake.png)
+
+![Lunar Lake: upstream vs this fork](docs/igpu/igpu-lunar-lake.png)
+
+The charts are drawn from the tables below by `docs/igpu/make_charts.py`; each chart compares numbers from one session.
+
 ### Prefill, Meteor Lake
 
 Intel Core Ultra (Meteor Lake), Arc iGPU, DDR5-5600 x2, Windows, `-ngl 99`.
