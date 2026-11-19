@@ -3,6 +3,7 @@
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
@@ -12,7 +13,7 @@
 layout (local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer Q {float16_t data_q[];};
-layout (binding = 1) readonly buffer KV4 {f16vec4 data_kv4[];};
+#include "flash_attn_xe_kv.glsl"
 layout (binding = 2) readonly buffer M {float16_t data_m[];};
 layout (binding = 3) buffer P {float16_t data_p[];};
 layout (binding = 4) buffer MAX {float data_max[];};
@@ -155,7 +156,7 @@ void main() {
             uint k_offset = k_base + row_idx * k_dim / 4 + col_idx;
             k_offset = min(k_offset, k_seq_boundary);
             const uint ksh_offset = (row_idx * TK + sh_chunk_r * TK * p_per_loop) / 4 + sh_chunk_c;
-            F16V4Poolsh.F16V4sh[ksh_offset] = data_kv4[k_offset];
+            F16V4Poolsh.F16V4sh[ksh_offset] = XE_LOAD_KV4(k_offset);
         }
     }
 
@@ -170,7 +171,7 @@ void main() {
                     const uint col_idx = flat_offset % hsk_v4;
                     uint k_offset = k_base + row_idx * k_dim / 4 + col_idx;
                     k_offset = min(k_offset, k_seq_boundary);
-                    kv4_temp[idx] = data_kv4[k_offset];
+                    kv4_temp[idx] = XE_LOAD_KV4(k_offset);
                 }
             }
         }
@@ -199,7 +200,7 @@ void main() {
                             const uint col_idx = flat_offset % (TK / 4);
                             const uint k_temp_offset = kv4_base_offset + row_idx * p.nbk1 / 4 + col_idx;
                             const uint ksh_temp_offset = sg * TM * TK / 4 + idx * SubGroupSize + lane;
-                            f16vec4 kv4_temp = (k_base_row + row_idx) < p.nek1 ? data_kv4[k_temp_offset] : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
+                            f16vec4 kv4_temp = (k_base_row + row_idx) < p.nek1 ? XE_LOAD_KV4(k_temp_offset) : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                             F16V4Poolsh.F16V4sh[ksh_temp_offset] = kv4_temp;
                         }
 

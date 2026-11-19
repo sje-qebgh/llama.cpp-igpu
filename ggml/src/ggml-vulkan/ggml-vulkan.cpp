@@ -1644,6 +1644,10 @@ static vk_xe_fa_tuning_params get_xe_fa_tuning_params(const vk_device_struct * d
         size_t shmem_oob_staging_sz = sg_per_gw * tm * tk * sizeof(ggml_fp16_t);
         size_t shmem_o_sz = sg_per_gw * out_col_per_wg_ph2 * omat_row * sizeof(float);
         size_t shmem_reuse_sz = 2 * shmem_group_max_sz + std::max(shmem_oob_staging_sz, 2 * shmem_p_sz);
+        if (pipeline_state.kv_type == GGML_TYPE_Q8_0) {
+            // q8_0 V is dequantized into a per-subgroup TK x out_col staging slot placed after both P buffers
+            shmem_reuse_sz = 2 * shmem_group_max_sz + 2 * shmem_p_sz + sg_per_gw * tk * out_col_per_wg_ph2 * sizeof(ggml_fp16_t);
+        }
 
         shmem_ph2_sz = shmem_lf_sz + shmem_global_max_sz;
         // Shmem of p/group max is reused with output accumulation, calculate the max size
@@ -3843,8 +3847,13 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                                              xe_fa_params.decode_params.out_row_per_wg_ph2, xe_fa_params.subgroup_size[1], xe_fa_params.decode_params.split_p_per_iter_ph2,
                                              xe_fa_params.decode_params.p_chunk_ph1, xe_fa_params.decode_params.out_col_per_wg_ph2,
                                              xe_fa_params.tm, xe_fa_params.tn, xe_fa_params.decode_params.pipeline_flag_ph2 };
-            ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, xe_fa_params.decode_params.p_chunk_ph1, 1 }, sc_ph1, 1, false, true, xe_fa_params.subgroup_size[0]);
-            ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 1, 1 }, sc_ph2, 1, false, true, xe_fa_params.subgroup_size[0]);
+            if (pipeline_state.kv_type == GGML_TYPE_Q8_0) {
+                ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1_q8_0", fa_decode_ph1_q8_0_cm1_len, fa_decode_ph1_q8_0_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, xe_fa_params.decode_params.p_chunk_ph1, 1 }, sc_ph1, 1, false, true, xe_fa_params.subgroup_size[0]);
+                ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2_q8_0", fa_decode_ph2_q8_0_cm1_len, fa_decode_ph2_q8_0_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 1, 1 }, sc_ph2, 1, false, true, xe_fa_params.subgroup_size[0]);
+            } else {
+                ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, xe_fa_params.decode_params.p_chunk_ph1, 1 }, sc_ph1, 1, false, true, xe_fa_params.subgroup_size[0]);
+                ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 1, 1 }, sc_ph2, 1, false, true, xe_fa_params.subgroup_size[0]);
+            }
         }
 
         for (auto& it : device->pipeline_xe_fa_prefill) {
@@ -9374,10 +9383,17 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const bool xe_fa_dequant_kv = use_dequant_kv && !kv_raw_strided && !xe_fa_no_dequant &&
                                   k_type_eff == GGML_TYPE_F16 && v_type_eff == GGML_TYPE_F16 &&
                                   (HSK % 8) == 0 && (HSV % 8) == 0 && ((uint64_t) ggml_nelements(k) * sizeof(ggml_fp16_t)) % 16 == 0;
+    // Token generation: the Xe decode kernels read a q8_0 K/V cache directly (dequantized on load).
+    // GGML_VK_XE_FA_NO_Q8_DECODE=1 sends it to the generic shader again.
+    static const bool xe_fa_no_q8_decode = getenv("GGML_VK_XE_FA_NO_Q8_DECODE") != nullptr;
+    const bool xe_fa_prefill_shape = neq1 > 8 || (nev2 > 0 && neq2 / nev2 > 64);
+    const bool xe_fa_q8_0_decode = !xe_fa_no_q8_decode && !xe_fa_prefill_shape && !use_dequant_kv &&
+                                   k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0 && neq0 % 32 == 0 && nev0 % 32 == 0 &&
+                                   ggml_vk_tensor_buffer_offset(ctx, k) % 16 == 0 && ggml_vk_tensor_buffer_offset(ctx, v) % 16 == 0;
     bool xe_fa_supported_usage = neq0 % 32 == 0 && nev0 % 16 == 0 && mask != nullptr && !use_sparse && max_bias == 0.0f && logit_softcap == 0.0f &&
-                                 (xe_fa_dequant_kv || (tensor_aligned_with(k, 16u) && tensor_aligned_with(v, 16u)));
+                                 (xe_fa_dequant_kv || xe_fa_q8_0_decode || (tensor_aligned_with(k, 16u) && tensor_aligned_with(v, 16u)));
     bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 &&
-                                 ((k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) || xe_fa_dequant_kv) &&
+                                 ((k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) || xe_fa_dequant_kv || xe_fa_q8_0_decode) &&
                                  mask != nullptr && mask->type == GGML_TYPE_F16;
     xe_fa_opt = xe_fa_supported_platform && xe_fa_supported_usage && xe_fa_supported_dtype;
     std::pair<vk_pipeline, vk_pipeline> xe_fa_pipeline_dual_phases = { nullptr , nullptr };
@@ -9392,7 +9408,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     {
         std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
         if (xe_fa_opt) {
-            if (neq1 > 8 || pv_ratio > 64) {
+            if (xe_fa_prefill_shape) {
                 uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
                 uint32_t batch_stride_q = uint32_t(nbq3 / ggml_type_size(q->type));
                 vk_xe_fa_pipeline_state prefill_state = { (uint32_t)neq0, (uint32_t)nev0, qk_ratio, pv_ratio, 0, false, false, false, false };
@@ -9413,7 +9429,8 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                     xe_fa_opt = false;
                 }
             } else {
-                vk_xe_fa_pipeline_state decode_state = { (uint32_t)neq0, (uint32_t)nev0, qk_ratio, pv_ratio, (uint32_t)neq1, false, false, false, false };
+                vk_xe_fa_pipeline_state decode_state = { (uint32_t)neq0, (uint32_t)nev0, qk_ratio, pv_ratio, (uint32_t)neq1, false, false, false, false,
+                                                          xe_fa_q8_0_decode ? (uint32_t) GGML_TYPE_Q8_0 : (uint32_t) GGML_TYPE_F16 };
                 decode_state.unaligned_seq_len = nek1 % 256 != 0;
                 xe_fa_params = get_xe_fa_tuning_params(vk_dev, decode_state, false);
                 const uint32_t split_p_size = xe_fa_params.decode_params.p_chunk_ph1;
@@ -9710,20 +9727,24 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     if (xe_fa_opt) {
         uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
-        // nb*_eff are the strides of the f16 copy when K/V were converted (use_dequant_kv), else nb*
-        const size_t k_ts = use_dequant_kv ? sizeof(ggml_fp16_t) : ggml_type_size(k->type);
-        const size_t v_ts = use_dequant_kv ? sizeof(ggml_fp16_t) : ggml_type_size(v->type);
-        uint32_t head_stride_k = uint32_t(nbk2_eff / k_ts);
-        uint32_t head_stride_v = uint32_t(nbv2_eff / v_ts);
+        // The Xe kernels take K/V strides in elements: of the f16 copy when K/V were converted (use_dequant_kv),
+        // else of the tensor (q8_0: blocks * 32)
+        auto xe_elem_stride = [&](uint64_t nb, const ggml_tensor * t) {
+            return use_dequant_kv ? uint32_t(nb / sizeof(ggml_fp16_t)) : uint32_t(nb / ggml_type_size(t->type) * ggml_blck_size(t->type));
+        };
+        uint32_t row_stride_k   = use_dequant_kv ? k_stride : xe_elem_stride(nbk1, k);
+        uint32_t row_stride_v   = use_dequant_kv ? v_stride : xe_elem_stride(nbv1, v);
+        uint32_t head_stride_k  = xe_elem_stride(nbk2_eff, k);
+        uint32_t head_stride_v  = xe_elem_stride(nbv2_eff, v);
         uint32_t batch_stride_q = uint32_t(nbq3 / ggml_type_size(q->type));
-        uint32_t batch_stride_k = uint32_t(nbk3_eff / k_ts);
-        uint32_t batch_stride_v = uint32_t(nbv3_eff / v_ts);
+        uint32_t batch_stride_k = xe_elem_stride(nbk3_eff, k);
+        uint32_t batch_stride_v = xe_elem_stride(nbv3_eff, v);
         uint32_t batch_stride_o = uint32_t(nb3 / ggml_type_size(dst->type));
 
         vk_xe_fa_push_constants pc_xe_fa = { (uint32_t)neq1, (uint32_t)neq2, (uint32_t)neq3,
                                              (uint32_t)nek1, (uint32_t)nek2, (uint32_t)nek3, (uint32_t)nev2, (uint32_t)nev3,
                                              (uint32_t)nem1, (uint32_t)nem2, (uint32_t)nem3,
-                                             q_stride, head_stride_q, k_stride, head_stride_k, v_stride, head_stride_v,
+                                             q_stride, head_stride_q, row_stride_k, head_stride_k, row_stride_v, head_stride_v,
                                              batch_stride_q, batch_stride_k, batch_stride_v, batch_stride_o,
                                              (sinks != nullptr) ? (1u << 16) : 0u, scale };
 
