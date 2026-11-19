@@ -1,0 +1,159 @@
+"""Release charts for llama.cpp-igpu. Numbers are copied from README-igpu.md; each panel compares
+numbers from one table (same machine, same session)."""
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+from matplotlib.transforms import ScaledTranslation
+from matplotlib.patches import FancyBboxPatch, Patch
+
+for f in font_manager.findSystemFonts():
+    if "/inter/" in f.lower():
+        font_manager.fontManager.addfont(f)
+plt.rcParams.update({
+    "font.family": "Inter", "font.size": 10,
+    "axes.edgecolor": "#d9d8d3", "axes.linewidth": 1,
+    "xtick.color": "#52514e", "ytick.color": "#0b0b0b",
+    "text.color": "#0b0b0b",
+})
+SURFACE = "#fcfcfb"
+GRID = "#e8e7e2"
+INK2 = "#52514e"
+PAD = 40
+SUB_Y = 1.11
+BASE = "#9b9a94"    # upstream / before (de-emphasized)
+FORK = "#2a78d6"    # this fork
+REF = "#1baf7a"     # f16 reference
+
+
+def rounded_barh(ax, y, w, h, color):
+    # square at the baseline, 4px-ish rounded data end
+    r = min(h * 0.35, w * 0.5)
+    ax.add_patch(FancyBboxPatch((0, y - h / 2), w, h, boxstyle=f"round,pad=0,rounding_size={r}",
+                                mutation_aspect=1, linewidth=0, facecolor=color))
+    ax.add_patch(plt.Rectangle((0, y - h / 2), min(w, r * 2), h, linewidth=0, facecolor=color))
+
+
+def panel(ax, title, subtitle, models, series, unit="t/s", gain_from=0, gain_to=-1):
+    """series: list of (label, color, values). Gain label compares series[gain_to] with series[gain_from]."""
+    n = len(series)
+    bar_h = 0.8 / n * 0.82
+    slot = 0.8 / n
+    xmax = max(max(v for v in s[2] if v is not None) for s in series)
+    ax.set_xlim(0, xmax * 1.28)
+    ax.set_ylim(len(models) - 0.5, -0.5)
+    for i, m in enumerate(models):
+        for j, (lab, col, vals) in enumerate(series):
+            v = vals[i]
+            if v is None:
+                continue
+            y = i - 0.4 + slot * (j + 0.5)
+            rounded_barh(ax, y, v, bar_h, col)
+            txt = f"{v:.1f}"
+            if j == (gain_to % n) and series[gain_from][2][i]:
+                g = v / series[gain_from][2][i] - 1
+                if abs(g) >= 0.03:
+                    txt += f"  ({g:+.0%})"
+            ax.text(v + xmax * 0.012, y, txt, va="center", ha="left", fontsize=9,
+                    color="#0b0b0b" if j == (gain_to % n) else INK2,
+                    fontweight="semibold" if j == (gain_to % n) else "normal")
+    ax.set_yticks(range(len(models)))
+    ax.set_yticklabels(models)
+    ax.tick_params(axis="y", length=0, pad=8)
+    ax.tick_params(axis="x", length=0, labelsize=8.5)
+    ax.xaxis.grid(True, color=GRID, linewidth=1)
+    ax.set_axisbelow(True)
+    for s in ("top", "right", "left"):
+        ax.spines[s].set_visible(False)
+    ax.set_xlabel(unit, color=INK2, fontsize=9)
+    ax.set_facecolor(SURFACE)
+    ax.set_title(title, loc="left", fontsize=12, fontweight="semibold", pad=PAD)
+    fig = ax.figure
+    ax.text(0, 1, subtitle, transform=ax.transAxes + ScaledTranslation(0, 22 / 72, fig.dpi_scale_trans),
+            fontsize=8.5, color=INK2, va="bottom")
+    ax.legend(bbox_transform=ax.transAxes + ScaledTranslation(0, 2 / 72, fig.dpi_scale_trans), handles=[Patch(color=c, label=l) for l, c, _ in series], loc="lower left",
+              bbox_to_anchor=(-0.01, 1.0), frameon=False, fontsize=8.5, ncol=len(series),
+              handlelength=1.2, borderaxespad=0.2, columnspacing=1.6)
+
+
+def save(fig, name, note):
+    fig.text(0.01, 0.01, note, fontsize=7.5, color=INK2, ha="left", va="bottom")
+    fig.savefig(name, dpi=200, facecolor=SURFACE)
+    plt.close(fig)
+
+
+# ---------------- Meteor Lake ----------------
+fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
+                        gridspec_kw={"height_ratios": [3, 4, 5], "hspace": 0.75})
+panel(axs[0], "Prefill vs upstream",
+      "pp512, -ub 512 · same session",
+      ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S", "Gemma-4 26B-A4B UD-IQ4_NL"],
+      [("upstream", BASE, [71.4, 74.6, 83.1]),
+       ("this fork (before the column skip below)", FORK, [152.5, 123.2, 114.7])])
+panel(axs[1], "MoE prefill: skipping unused tile columns",
+      "pp512, -fa 0 · same session, 2 alternating runs · gain on top of the chart above",
+      ["Qwen3-Coder-30B-A3B UD-Q2_K_XL", "Qwen3.6-35B-A3B UD-IQ3_S",
+       "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"],
+      [("before", BASE, [31.6, 80.0, 87.2, 203.4]),
+       ("after", FORK, [67.3, 145.5, 138.5, 223.2])])
+panel(axs[2], "Token generation",
+      "tg128 · same session · fp16 mat-vec measured with GGML_VK_XE1_MMVQ_LEGACY=1",
+      ["Qwen3-Coder-30B-A3B UD-Q2_K_XL", "Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S",
+       "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"],
+      [("fp16 mat-vec, as upstream", BASE, [17.0, 15.3, 14.4, 14.3, 20.5]),
+       ("this fork, per-type default", FORK, [26.3, 21.0, 19.0, 14.1, 20.6])])
+fig.suptitle("Meteor Lake (Core Ultra, Arc Xe-LPG iGPU) · llama.cpp-igpu", x=0.01, ha="left",
+             fontsize=14, fontweight="bold", y=0.985)
+fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
+save(fig, "igpu-meteor-lake.png",
+     "Windows, Vulkan, -ngl 99. Each chart compares numbers from one session; the charts come from different sessions.\n"
+     "Run-to-run noise is 5-10%. Details: README-igpu.md")
+
+# ---------------- Lunar Lake ----------------
+fig, axs = plt.subplots(3, 1, figsize=(8.2, 8.0), facecolor=SURFACE,
+                        gridspec_kw={"height_ratios": [1.4, 2.2, 2.2], "hspace": 1.0})
+panel(axs[0], "Token generation vs upstream",
+      "tg128 · upstream 5a4afd8 vs fork eaf44b1, 5 alternating runs · later fork builds: about 32 t/s",
+      ["Qwen3.6-35B-A3B UD-IQ3_S"],
+      [("upstream", BASE, [23.8]), ("this fork", FORK, [28.5])])
+
+
+def single(ax, title, subtitle, rows):
+    labels = [r[0] for r in rows]
+    xmax = max(r[1] for r in rows)
+    ax.set_xlim(0, xmax * 1.22)
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    for i, (lab, v, col, bold, extra) in enumerate(rows):
+        rounded_barh(ax, i, v, 0.5, col)
+        ax.text(v + xmax * 0.012, i, (f"{v:.1f}" if v < 100 else f"{v:g}") + extra, va="center", fontsize=9,
+                color="#0b0b0b" if bold else INK2, fontweight="semibold" if bold else "normal")
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels(labels)
+    ax.tick_params(axis="y", length=0, pad=8)
+    ax.tick_params(axis="x", length=0, labelsize=8.5)
+    ax.xaxis.grid(True, color=GRID, linewidth=1)
+    ax.set_axisbelow(True)
+    for s in ("top", "right", "left"):
+        ax.spines[s].set_visible(False)
+    ax.set_xlabel("t/s", color=INK2, fontsize=9)
+    ax.set_facecolor(SURFACE)
+    ax.set_title(title, loc="left", fontsize=12, fontweight="semibold", pad=24)
+    ax.text(0, 1.03, subtitle, transform=ax.transAxes, fontsize=8.5, color=INK2, va="bottom")
+
+
+single(axs[1], "Prefill with a q8_0 KV cache (-ctk q8_0 -ctv q8_0)",
+       "pp512 at 16k context (-d 16384 -ub 1024) · Qwen3.6-35B-A3B UD-IQ3_S",
+       [("q8_0, before", 167, BASE, False, ""),
+        ("q8_0, this fork", 445, FORK, True, "  (2.7x)"),
+        ("f16 cache (reference)", 472, REF, False, "")])
+single(axs[2], "Token generation with a q8_0 KV cache",
+       "tg1024 at 16k context (-d 16384) · Qwen3.6-35B-A3B UD-IQ3_S",
+       [("q8_0, before", 23.2, BASE, False, ""),
+        ("q8_0, this fork", 27.2, FORK, True, "  (+17%)"),
+        ("f16 cache (reference)", 29, REF, False, " (about)")])
+fig.suptitle("Lunar Lake (Core Ultra 200V, Arc 140V) · llama.cpp-igpu", x=0.01, ha="left",
+             fontsize=14, fontweight="bold", y=0.985)
+fig.subplots_adjust(left=0.34, right=0.97, top=0.84, bottom=0.10)
+save(fig, "igpu-lunar-lake.png",
+     "Windows, Vulkan, -ngl 99. Each chart compares numbers from one session; the charts come from different sessions.\n"
+     "Run-to-run noise is 5-10%. Details: README-igpu.md")
