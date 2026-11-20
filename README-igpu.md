@@ -311,6 +311,16 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   read-back, size computation, the mmap path and every other shader that reads these blocks, and make rebases harder.
   It only removes the index assembly (about 8 us of 60 per IQ2_S gate/up call in the probe), inside the same
   1.5% upper bound as above.
+- Int8 XMX (coopmat int8, 8x16x32 on Xe2) for MMQ prefill on Lunar Lake.
+  - Tried: the int8 coopmat MMQ shader that upstream uses on RDNA3/RDNA4, enabled for Xe2 (Q4_0, Q4_1, Q5_0, Q5_1,
+    Q8_0, IQ4_NL, IQ4_XS, MXFP4, Q4_K, Q5_K; types with a scale per 16 values cannot use K=32). Results were correct
+    with the interleaved accumulator layout.
+  - Measured (best large tile, 128x128): slower than the FP16 coopmat path in every case. `test-backend-ops perf`
+    MUL_MAT 4096x512x14336 18-41% slower, MUL_MAT_ID 768x512x2048 21-42% slower; pp512 Gemma-4 26B-A4B UD-IQ4_NL
+    796 -> 671 t/s, gpt-oss-20b UD-Q4_K_XL 959 -> 696 t/s.
+  - Why: the shader takes the integer result out of the matrix every 32 values of K to apply the block scales, while
+    the FP16 path keeps accumulating inside XMX; on Xe2 this costs more than the 2x int8 rate gains. The B side also
+    needs an extra quantize pass to q8_1.
 
 ## Keeping up with upstream
 
