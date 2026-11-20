@@ -1218,6 +1218,8 @@ void ggml_vk_wait_events(vk_context& ctx, std::vector<vk::Event>&& events) {
     );
 }
 
+static bool ggml_vk_fa_scalar_uses_mmq(const vk_device& device, ggml_type k_type, ggml_type v_type);
+
 static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
 
     vk_fa_tuning_params result{};
@@ -1277,6 +1279,22 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     if (result.shmem_staging && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc, k_type, v_type)) {
         result.shmem_staging = 0;
+    }
+
+    // Xe-LPG iGPU (Meteor Lake), head size 256 with a quantized K read through integer dot products
+    // (e.g. a q8_0 KV cache): 16 rows and 256 threads per workgroup. Qwen3.6-35B-A3B pp512 at depth 16384:
+    // 54 -> 69 t/s, at depth 4096: 107 -> 120 t/s. The f16 shader gets slower with this shape, so it keeps the default.
+    // GGML_VK_XE1_FA_DEFAULT_TILE=1 keeps the default shape for comparison.
+    if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 && device->uma &&
+        n_rows > 8 && hsk == 256 && hsv == 256 && result.row_split == 4 &&
+        ggml_vk_fa_scalar_uses_mmq(device, k_type, v_type)) {
+        static const bool keep_default = getenv("GGML_VK_XE1_FA_DEFAULT_TILE") != nullptr;
+        vk_fa_tuning_params t = result;
+        t.block_rows = 16;
+        t.workgroup_size = 256;
+        if (!keep_default && ggml_vk_flash_attn_scalar_shmem_support(device, t, hsk, hsv, f32acc, k_type, v_type)) {
+            result = t;
+        }
     }
 
     // With head sizes above 128, 16 rows per workgroup spill registers on Qualcomm and run about

@@ -16,6 +16,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill, MoE (`mul_mat_id` integer dot MMQ) | a tile covers up to BN rows of one expert; columns past the rows the expert has are no longer loaded or multiplied. With 128-256 experts most of a 64-column tile is empty at pp512 | measured on Meteor Lake |
 | Prefill with a quantized KV cache (e.g. `-ctk q8_0 -ctv q8_0`), Xe2 | upstream converts the cache to f16 before flash attention, but then still checked the original type for the Intel flash attention kernels (`xe_fa`) and fell back to the generic scalar shader, 10x slower. The converted cache now uses the Intel kernels. `GGML_VK_XE_FA_NO_DEQUANT=1` restores the old behavior | measured on Lunar Lake |
 | Token generation with a q8_0 KV cache, Xe2 | the Intel flash attention decode kernels read q8_0 K/V directly (dequantized on load) instead of falling back to the generic shader. `GGML_VK_XE_FA_NO_Q8_DECODE=1` restores the old behavior | measured on Lunar Lake |
+| Prefill with a quantized K cache (e.g. `-ctk q8_0`), Xe-LPG iGPU | the generic flash attention shader (integer dot version, head size 256) uses 16 query rows and 256 threads per workgroup instead of 8 and 128. `GGML_VK_XE1_FA_DEFAULT_TILE=1` restores the old shape | measured on Meteor Lake |
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Qwen3.5/3.6 prefill, Xe2 | that variant loads k/q/g/beta of 8 tokens per shared memory block, so the workgroup waits once per 8 tokens instead of every token; calls with more than 1024 tokens keep 1 token per block (slower with 8). `GGML_VK_GDN_TB=N` sets the block size | measured on Lunar Lake |
@@ -187,6 +188,23 @@ it matches the faster of the two other settings for every model.
 | Gemma-4 26B-A4B UD-IQ4_NL | 14.1 | 14.3 | 12.7 |
 | gpt-oss-20b UD-Q4_K_XL | 20.6 | 20.5 | 16.1 |
 
+### Long context prefill on Meteor Lake (flash attention)
+
+Qwen3.6-35B-A3B UD-IQ3_S, pp512 at depth (`-d`), default `-ub 512`, 2 alternating runs (mean), build c271846 with a
+test patch for the tile shape. Meteor Lake has no Intel flash attention kernels, so the generic scalar shader runs:
+
+| Setting | d4096 | d16384 |
+|---|---|---|
+| `-fa 1`, q8_0/q8_0, old tile (8 rows, 128 threads) | 107.3 | 54.2 |
+| `-fa 1`, q8_0/q8_0, new tile (16 rows, 256 threads) | 120.1 | 68.8 |
+| `-fa 1`, f16 | 108.0 | 52.3 |
+| `-fa 0`, f16 | 124.8 | 83.8 |
+
+The new tile is slower for the f16 shader (`test-backend-ops perf`), so only the integer dot version uses it.
+Without flash attention, with f16 K/V the KQ and KQV products are ordinary matmuls. In an earlier run of the release
+build at the same depths, token generation (tg64) was also no slower with `-fa 0` and f16 K/V: 14.6/12.5 vs 12.6/12.2 t/s
+for `-fa 1` q8_0. `-fa 0` with only K in q8_0 was slow for token generation (7.9/8.7 t/s).
+
 ### What the profiles say (Lunar Lake, tg)
 
 - Large dense mat-vecs (lm_head, big FFNs) reach about 100 GB/s of the ~136 GB/s theoretical bandwidth.
@@ -225,6 +243,7 @@ it matches the faster of the two other settings for every model.
 - `GGML_VK_SUBGROUP_OVERRIDE="matmul=16,!iq3_s_q8_1=8"`: subgroup size by pipeline name substring; `!` also replaces a
   size the backend already pins. Check results with `test-backend-ops` under the same setting.
 - `GGML_VK_XE_FA_NO_Q8_DECODE=1`: token generation with a q8_0 KV cache does not use the Intel flash attention decode kernels (old behavior)
+- `GGML_VK_XE1_FA_DEFAULT_TILE=1`: Xe-LPG, the generic flash attention shader keeps 8 rows / 128 threads per workgroup for a quantized K cache (old behavior)
 - `GGML_VK_XE_FA_NO_DEQUANT=1`: a quantized KV cache converted to f16 for prefill does not use the Intel flash attention kernels (old behavior)
 - `GGML_VK_GDN_TB=N`: Gated DeltaNet (Intel variant) tokens per shared memory block for calls of up to 1024 tokens (Xe2 default 8, others 1)
 - `GGML_VK_MMVQ_IQ_SHMEM=1`: IQ2/IQ3 MMVQ copy the (bit-packed) grid table into shared memory per workgroup instead of reading it from a storage buffer
@@ -238,10 +257,14 @@ measuring a baseline.
   per expert and better use of each matmul tile. Measured with Qwen3.6-35B-A3B UD-IQ3_S, pp2048 (5095e8b):
   Lunar Lake `-ub 512` 631, `-ub 1024` 711, `-ub 2048` 671 t/s; Meteor Lake 142, 155, 160 t/s.
   So `-b 2048 -ub 1024` on Lunar Lake, `-b 2048 -ub 2048` on Meteor Lake (Gemma-4 26B-A4B: `-ub 2048` measured earlier).
-- Gemma-4 on Meteor Lake: `-fa off` was faster than flash attention (no KV cache quantization then).
+- Meteor Lake, long prompts: `-fa off` with the default f16 KV cache was the fastest, for Qwen3.6 at 16k context
+  pp512 83.8 t/s vs 68.8 with `-fa on -ctk q8_0 -ctv q8_0` (new tile) and 52.3 with `-fa on` f16. Without flash
+  attention the KQ matrix is kept in the compute buffer: 16 heads x ubatch x context x 4 bytes, about 0.55 GB at
+  `-ub 512` and 16k, 2.2 GB at `-ub 2048`. With `-fa off` the V cache cannot be quantized. Gemma-4 on Meteor Lake:
+  `-fa off` was also faster than flash attention.
 - KV cache: q8_0 costs little speed now. Lunar Lake, Qwen3.6 at 16k context: prefill f16 472 / q8_0 445 t/s,
   token generation f16 29.0 / q8_0 27.2 t/s (before: 167 and 23.2). Meteor Lake (no Intel flash attention kernels
-  there): f16 and q8_0 within run-to-run noise for both. f16 is still slightly faster on Lunar Lake; with few
+  there): with flash attention, q8_0 is now faster than f16 at long context (see above). f16 is still slightly faster on Lunar Lake; with few
   attention layers (Qwen3.6: 10 of 40) the f16 cache is small, e.g. about 670 MB at 32k context.
 
 ## Correctness
