@@ -186,7 +186,7 @@ move where expected.
 | packed IQ grid tables (+ rows per workgroup) | Qwen3.6-35B-A3B UD-IQ2_XXS | 26.1 t/s | 28.4 t/s | IQ2_S MoE down 126 -> 69 us per call |
 | Q6_K: 4 rows per workgroup | Qwen3.6-35B-A3B UD-IQ3_S | 23.9 t/s | 24.8 t/s | dense Q6_K is about half of the token time in this quant |
 | IQ3_S MoE: 8 lanes per row | Gemma-4 26B-A4B UD-IQ4_NL | 20.2 t/s | 21.0 t/s | IQ3_S gate_up (k=2816) 300 -> 245 us per call |
-| IQ4_NL MoE: 8 lanes per row, 4 rows (was 1 subgroup per row, 2 rows) | Gemma-4 26B-A4B UD-IQ4_NL | 19.83 t/s (4 rows only) | 21.30 t/s | IQ4_NL down (m=2816, k=704 = 22 blocks) 237 -> 156 us per call; 3 alternating rounds with `GGML_VK_MMVQ_ID_LANES` / `GGML_VK_MMVQ_ID_ROWS`, build 963be5f |
+| IQ4_NL MoE: 8 lanes per row, 4 rows (was 1 subgroup per row, 2 rows) | Gemma-4 26B-A4B UD-IQ4_NL | 23.39 t/s (23.34-23.44) | 24.46 t/s (24.37-24.52) | IQ4_NL down (m=2816, k=704 = 22 blocks) 198 -> 131 us per call, gate_up (k=2816) 345 -> 295 us; 3 alternating rounds with `GGML_VK_MMVQ_ID_LANES` / `GGML_VK_MMVQ_ID_ROWS`, build 963be5f. A first run on a warm machine: 156 us, 19.8 -> 21.3 t/s |
 | recurrent state read in place | Qwen3.6-35B-A3B UD-IQ3_S | 28.85 t/s | 30.24 t/s | 60 of 62 `GET_ROWS` per token gone (1.8 ms); `GATED_DELTA_NET` +0.3 ms since the state no longer comes from cache; 5 alternating runs each |
 | IQ grid tables in a storage buffer (vs bit-packed shared memory) | Qwen3.6-35B-A3B UD-IQ3_S | 30.24 t/s | 31.39 t/s | 6 alternating runs each |
 | IQ grid tables in a storage buffer | Qwen3.6-35B-A3B UD-IQ2_XXS | 32.97 t/s | 33.80 t/s | |

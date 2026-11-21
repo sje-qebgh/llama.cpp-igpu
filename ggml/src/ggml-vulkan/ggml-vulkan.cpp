@@ -3627,7 +3627,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         if (lanes == 0 && id && device->mmvq_xe2_tuned && (t == GGML_TYPE_IQ3_S || t == GGML_TYPE_IQ4_NL)) {
             // Arc 140V tg128: Gemma4 26B-A4B gate_up (k=2816) 300 -> 245 us, Qwen3.6 35B-A3B down (k=512) 81 -> 76 us.
             // IQ4_NL, Gemma4 26B-A4B down (k=704 = 22 blocks, so a full subgroup per row leaves 10 lanes idle):
-            // with 4 rows per workgroup 237 -> 156 us at 8 lanes (4 lanes x 8 rows 185, 2 x 16 200, 16 x 2 257);
+            // 198 -> 131 us at 8 lanes x 4 rows (4 lanes x 8 rows 161, 2 x 16 177, 16 x 2 198), tg128 23.4 -> 24.5 t/s;
             // the fewer lanes need as many rows as row slots, with the old 2 rows they looked slower.
             lanes = 8;
         }
