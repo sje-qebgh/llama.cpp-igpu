@@ -60,6 +60,24 @@ have differed (Dell Optimizer "Ultra Performance" now; the Windows power mode th
 it). Which of the two it is was not separated. Upstream changed much less (pp512 74.6 then, 79.1 now). The older tables were not
 re-measured.
 
+### Lunar Lake: upstream vs this fork
+
+`bench-compare.ps1`, 2026-11-21: Core Ultra 7 268V (Arc 140V), driver 32.0.101.9028, Windows power mode best
+performance, on AC. Upstream 44c20b1 vs this fork 02d5e70, `llama-bench` defaults, 3 alternating rounds (2 at depth
+16384), median t/s (upstream had one slow pp512 round for Qwen3-Coder and gpt-oss):
+
+| model | pp512 upstream | pp512 fork | tg128 upstream | tg128 fork |
+|---|---|---|---|---|
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 644.8 | 642.8 (1.00x) | 25.5 | 36.3 (1.42x) |
+| Qwen3.6-35B-A3B UD-IQ3_XXS | 616.0 | 624.8 (1.01x) | 23.9 | 31.7 (1.33x) |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 845.0 | 852.3 (1.01x) | 41.4 | 46.0 (1.11x) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 821.7 | 817.8 (1.00x) | 21.5 | 23.1 (1.07x) |
+| gpt-oss-20b UD-Q4_K_XL | 951.6 | 972.8 (1.02x) | 31.3 | 33.0 (1.05x) |
+| Qwen3.6 IQ3_XXS, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 162.4 | 444.9 (2.74x) | 18.5 | 27.6 (1.49x) |
+
+On Lunar Lake prefill at short context runs on the same FP16 XMX matmuls as upstream; the fork's gains are token
+generation and long context with a quantized KV cache.
+
 ### Prefill, Meteor Lake
 
 Intel Core Ultra (Meteor Lake), Arc iGPU, DDR5-5600 x2, Windows, `-ngl 99`.
