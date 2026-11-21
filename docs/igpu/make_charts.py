@@ -112,50 +112,30 @@ save(fig, "igpu-meteor-lake.png",
      "Run-to-run noise is 5-10%. Details: README-igpu.md")
 
 # ---------------- Lunar Lake ----------------
-fig, axs = plt.subplots(3, 1, figsize=(8.2, 8.0), facecolor=SURFACE,
-                        gridspec_kw={"height_ratios": [1.4, 2.2, 2.2], "hspace": 1.0})
-panel(axs[0], "Token generation vs upstream",
-      "tg128 · upstream 5a4afd8 vs fork eaf44b1, 5 alternating runs · later fork builds: about 32 t/s",
-      ["Qwen3.6-35B-A3B UD-IQ3_S"],
-      [("upstream", BASE, [23.8]), ("this fork", FORK, [28.5])])
-
-
-def single(ax, title, subtitle, rows):
-    labels = [r[0] for r in rows]
-    xmax = max(r[1] for r in rows)
-    ax.set_xlim(0, xmax * 1.22)
-    ax.set_ylim(len(rows) - 0.5, -0.5)
-    for i, (lab, v, col, bold, extra) in enumerate(rows):
-        rounded_barh(ax, i, v, 0.5, col)
-        ax.text(v + xmax * 0.012, i, (f"{v:.1f}" if v < 100 else f"{v:g}") + extra, va="center", fontsize=9,
-                color="#0b0b0b" if bold else INK2, fontweight="semibold" if bold else "normal")
-    ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels(labels)
-    ax.tick_params(axis="y", length=0, pad=8)
-    ax.tick_params(axis="x", length=0, labelsize=8.5)
-    ax.xaxis.grid(True, color=GRID, linewidth=1)
-    ax.set_axisbelow(True)
-    for s in ("top", "right", "left"):
-        ax.spines[s].set_visible(False)
-    ax.set_xlabel("t/s", color=INK2, fontsize=9)
-    ax.set_facecolor(SURFACE)
-    ax.set_title(title, loc="left", fontsize=12, fontweight="semibold", pad=24)
-    ax.text(0, 1.03, subtitle, transform=ax.transAxes, fontsize=8.5, color=INK2, va="bottom")
-
-
-single(axs[1], "Prefill with a q8_0 KV cache (-ctk q8_0 -ctv q8_0)",
-       "pp512 at 16k context (-d 16384 -ub 1024) · Qwen3.6-35B-A3B UD-IQ3_S",
-       [("q8_0, before", 167, BASE, False, ""),
-        ("q8_0, this fork", 445, FORK, True, "  (2.7x)"),
-        ("f16 cache (reference)", 472, REF, False, "")])
-single(axs[2], "Token generation with a q8_0 KV cache",
-       "tg1024 at 16k context (-d 16384) · Qwen3.6-35B-A3B UD-IQ3_S",
-       [("q8_0, before", 23.2, BASE, False, ""),
-        ("q8_0, this fork", 27.2, FORK, True, "  (+17%)"),
-        ("f16 cache (reference)", 29, REF, False, " (about)")])
-fig.suptitle("Lunar Lake (Core Ultra 200V, Arc 140V) · llama.cpp-igpu", x=0.01, ha="left",
+# bench-compare.ps1, 2026-11-21: Core Ultra 7 268V, driver 32.0.101.9028, upstream 44c20b1 vs fork 02d5e70,
+# 3 alternating rounds at depth 0 (2 at depth 16384), medians (upstream had one slow round for two models).
+LNL_MODELS = ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_XXS", "Qwen3-Coder-30B-A3B UD-Q2_K_XL",
+              "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"]
+fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
+                        gridspec_kw={"height_ratios": [5, 5, 2.2], "hspace": 0.75})
+panel(axs[0], "Prefill",
+      "pp512, llama-bench defaults · 3 alternating rounds, median",
+      LNL_MODELS,
+      [("upstream 44c20b1", BASE, [644.8, 616.0, 845.0, 821.7, 951.6]),
+       ("this fork 02d5e70", FORK, [642.8, 624.8, 852.3, 817.8, 972.8])])
+panel(axs[1], "Token generation",
+      "tg128, llama-bench defaults · 3 alternating rounds, median",
+      LNL_MODELS,
+      [("upstream 44c20b1", BASE, [25.5, 23.9, 41.4, 21.5, 31.3]),
+       ("this fork 02d5e70", FORK, [36.3, 31.7, 46.0, 23.1, 33.0])])
+panel(axs[2], "Long context: 16k tokens in the KV cache",
+      "Qwen3.6-35B-A3B UD-IQ3_XXS, -d 16384 -fa 1 -ctk q8_0 -ctv q8_0 · 2 alternating rounds",
+      ["pp512", "tg128"],
+      [("upstream 44c20b1", BASE, [162.4, 18.5]),
+       ("this fork 02d5e70", FORK, [444.9, 27.6])])
+fig.suptitle("Lunar Lake (Core Ultra 7 268V, Arc 140V) · llama.cpp-igpu", x=0.01, ha="left",
              fontsize=14, fontweight="bold", y=0.985)
-fig.subplots_adjust(left=0.34, right=0.97, top=0.84, bottom=0.10)
+fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
 save(fig, "igpu-lunar-lake.png",
-     "Windows, Vulkan, -ngl 99. Each chart compares numbers from one session; the charts come from different sessions.\n"
+     "Windows, Vulkan, -ngl 99, driver 32.0.101.9028, Windows power mode best performance, on AC. One session (2026-11-21).\n"
      "Run-to-run noise is 5-10%. Details: README-igpu.md")
