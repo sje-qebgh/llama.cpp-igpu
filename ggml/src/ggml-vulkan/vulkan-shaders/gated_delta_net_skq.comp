@@ -32,6 +32,7 @@ layout(push_constant) uniform Parameters {
     uint n_seqs;
     uint s_off;
     uint sq1, sq2, sq3;
+    uint sk1, sk2, sk3;
     uint sv1, sv2, sv3;
     uint sb1, sb2, sb3;
     uint neq1, rq3;
@@ -115,7 +116,8 @@ void load_block(const uint t0, const uint nt, const uint b) {
         const uint i = e % S_V;
         const uint t = t0 + j;
         const uint q_off = iq3 * sq3 + t * sq2 + iq1 * sq1;
-        k_sh[(b * TB + j) * S_V + i] = FLOAT_TYPE(data_k[q_off + i]);
+        const uint k_off = iq3 * sk3 + t * sk2 + iq1 * sk1;
+        k_sh[(b * TB + j) * S_V + i] = FLOAT_TYPE(data_k[k_off + i]);
         q_sh[(b * TB + j) * S_V + i] = FLOAT_TYPE(data_q[q_off + i]);
         if (KDA != 0) {
             const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
