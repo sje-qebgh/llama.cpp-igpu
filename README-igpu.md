@@ -380,6 +380,14 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   - Why: the shader takes the integer result out of the matrix every 32 values of K to apply the block scales, while
     the FP16 path keeps accumulating inside XMX; on Xe2 this costs more than the 2x int8 rate gains. The B side also
     needs an extra quantize pass to q8_1.
+- Fusing the MoE gate and up mat-vecs (and the GLU) on Lunar Lake.
+  - Tried: the same Qwen3.6-35B-A3B UD-IQ3_S GGUF with `ffn_gate_exps` and `ffn_up_exps` merged into
+    `ffn_gate_up_exps` (rows joined per expert, no requantization), which llama.cpp already loads as one MUL_MAT_ID.
+  - Measured (3 alternating rounds against the original file): pp512 +0.8%, tg128 +0.3%, tg128 at depth 4096 +0.7%,
+    all within noise. The estimate from per-op times had been +2.5-3%.
+  - Why: the per-op times come from the perf logger, which runs ops one after another. In normal runs gate and up do
+    not depend on each other and are dispatched without a barrier, so they already overlap on the GPU. Moving the GLU
+    into the shader would save at most its 1-2% of the time.
 
 ## Keeping up with upstream
 
