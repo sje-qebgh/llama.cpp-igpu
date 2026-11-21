@@ -17,6 +17,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill with a quantized KV cache (e.g. `-ctk q8_0 -ctv q8_0`), Xe2 | upstream converts the cache to f16 before flash attention, but then still checked the original type for the Intel flash attention kernels (`xe_fa`) and fell back to the generic scalar shader, 10x slower. The converted cache now uses the Intel kernels. `GGML_VK_XE_FA_NO_DEQUANT=1` restores the old behavior | measured on Lunar Lake |
 | Token generation with a q8_0 KV cache, Xe2 | the Intel flash attention decode kernels read q8_0 K/V directly (dequantized on load) instead of falling back to the generic shader. `GGML_VK_XE_FA_NO_Q8_DECODE=1` restores the old behavior | measured on Lunar Lake |
 | Prefill with a quantized K cache (e.g. `-ctk q8_0`), Xe-LPG iGPU | the generic flash attention shader (integer dot version, head size 256) uses 16 query rows and 256 threads per workgroup instead of 8 and 128. `GGML_VK_XE1_FA_DEFAULT_TILE=1` restores the old shape | measured on Meteor Lake |
+| Token generation with flash attention, Xe-LPG iGPU | the generic flash attention shader uses 256 threads per workgroup instead of 128 when it runs one token (also with GQA rows). `GGML_VK_XE1_FA_DECODE_WG128=1` restores 128 | measured on Meteor Lake |
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Qwen3.5/3.6 prefill, Xe2 | that variant loads k/q/g/beta of 8 tokens per shared memory block, so the workgroup waits once per 8 tokens instead of every token; calls with more than 1024 tokens keep 1 token per block (slower with 8). `GGML_VK_GDN_TB=N` sets the block size | measured on Lunar Lake |
@@ -188,6 +189,23 @@ it matches the faster of the two other settings for every model.
 | Gemma-4 26B-A4B UD-IQ4_NL | 14.1 | 14.3 | 12.7 |
 | gpt-oss-20b UD-Q4_K_XL | 20.6 | 20.5 | 16.1 |
 
+### Token generation with flash attention on Meteor Lake
+
+At long context the decode attention read the KV cache at about 11 GB/s (Qwen3.6, depth 16384: 16.6 of 66 ms per
+token), while the weight mat-vecs read 30-70 GB/s. 256 threads per workgroup instead of 128 (build 9e1b619 with a test
+patch, 3 alternating rounds for `test-backend-ops perf`, 2 for llama-bench):
+
+| | 128 threads | 256 threads |
+|---|---|---|
+| FA, 2 KV heads x 8, 1 token, KV 16384, q8_0 | 1307 us | 835 us |
+| FA, same, f16 | 1466 us | 763 us |
+| Qwen3.6-35B-A3B UD-IQ3_S tg64 at d16384, `-fa 1` q8_0/q8_0 | 15.17 | 16.60 |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL tg64 at d4096, `-fa 1` | 14.80 | 20.04 |
+| Gemma-4 26B-A4B UD-IQ4_NL tg64 at d4096, `-fa 1` | 12.18 | 12.55 |
+| gpt-oss-20b UD-Q4_K_XL tg64 at d4096, `-fa 1` | 17.69 | 18.11 |
+
+More KV splits, 64 columns per block, 512 threads, row split 1 or 8 and d split 4 or 16 were slower or no better.
+
 ### Long context prefill on Meteor Lake (flash attention)
 
 Qwen3.6-35B-A3B UD-IQ3_S, pp512 at depth (`-d`), default `-ub 512`, 2 alternating runs (mean), build c271846 with a
@@ -243,6 +261,7 @@ for `-fa 1` q8_0. `-fa 0` with only K in q8_0 was slow for token generation (7.9
 - `GGML_VK_SUBGROUP_OVERRIDE="matmul=16,!iq3_s_q8_1=8"`: subgroup size by pipeline name substring; `!` also replaces a
   size the backend already pins. Check results with `test-backend-ops` under the same setting.
 - `GGML_VK_XE_FA_NO_Q8_DECODE=1`: token generation with a q8_0 KV cache does not use the Intel flash attention decode kernels (old behavior)
+- `GGML_VK_XE1_FA_DECODE_WG128=1`: Xe-LPG, token generation keeps 128 threads per workgroup in the generic flash attention shader (old behavior)
 - `GGML_VK_XE1_FA_DEFAULT_TILE=1`: Xe-LPG, the generic flash attention shader keeps 8 rows / 128 threads per workgroup for a quantized K cache (old behavior)
 - `GGML_VK_XE_FA_NO_DEQUANT=1`: a quantized KV cache converted to f16 for prefill does not use the Intel flash attention kernels (old behavior)
 - `GGML_VK_GDN_TB=N`: Gated DeltaNet (Intel variant) tokens per shared memory block for calls of up to 1024 tokens (Xe2 default 8, others 1)
