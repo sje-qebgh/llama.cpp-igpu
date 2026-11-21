@@ -263,6 +263,61 @@ Without flash attention, with f16 K/V the KQ and KQV products are ordinary matmu
 build at the same depths, token generation (tg64) was also no slower with `-fa 0` and f16 K/V: 14.6/12.5 vs 12.6/12.2 t/s
 for `-fa 1` q8_0. `-fa 0` with only K in q8_0 was slow for token generation (7.9/8.7 t/s).
 
+### Token generation: memory bandwidth per layer and quant type
+
+Bytes of weights read per call / GPU time per call, from `GGML_VK_PERF_LOGGER=1` tg64 profiles at depth 0
+(`prof-tg.ps1`, 5 models). MoE rows count the experts used per token (8, gpt-oss 4). Meteor Lake: Core Ultra 5 135H,
+driver 32.0.101.9028, build 9e1b619. Lunar Lake: Core Ultra 7 268V, driver 32.0.101.9028, build 963be5f. On Lunar
+Lake every type runs MMVQ; on Meteor Lake the path is chosen per type (fp16 = dequantizing mat-vec).
+
+| layer | type | m x k (model) | MB per call | Meteor GB/s | Lunar GB/s |
+|---|---|---|---|---|---|
+| output | q8_0 | 262144x2816 (Gemma-4) | 784 | 71 (fp16) | 104 |
+| output | q8_0 | 201088x2880 (gpt-oss) | 615 | 69 (fp16) | 103 |
+| output | q6_K | 248320x2048 (Qwen3.6 IQ3_S) | 417 | 68 (fp16) | 100 |
+| output | q4_K | 248320x2048 (Qwen3.6 IQ2_XXS) | 286 | 73 | 91 |
+| output | q6_K | 151936x2048 (Qwen3-Coder) | 255 | 68 (fp16) | 101 |
+| projection | q8_0 | 8192x2816, 2816x8192 (Gemma-4) | 24.5 | 58-61 (fp16) | 97-99 |
+| projection | q6_K | 8192x2048 (Qwen3.6 IQ3_S) | 13.8 | 61 (fp16) | 91 |
+| projection | q8_0 | 4096x2816, 2816x4096 (Gemma-4) | 12.3 | 59-60 (fp16) | 94-96 |
+| projection | q5_K | 8192x2048 (Qwen3.6 IQ2_XXS) | 11.5 | 66 | 83 |
+| projection | q6_K | 2880x4096 (gpt-oss) | 9.7 | 58 (fp16) | 92 |
+| projection | q5_0 | 4096x2880 (gpt-oss) | 8.1 | 54 (fp16) | 91 |
+| projection | q6_K | 4096x2048, 2048x4096 (Qwen3.6, Qwen3-Coder) | 6.9 | 44-55 (fp16) | 75-89 |
+| projection | q4_K | 2880x4096 (gpt-oss) | 6.6 | 64 | 85 |
+| projection | q8_0 | 2112x2816, 2048x2816 (Gemma-4) | 6.1-6.3 | 57-58 (fp16) | 91-92 |
+| projection | q5_K | 4096x2048, 2048x4096 (Qwen3.6 IQ2_XXS) | 5.8 | 45-54 | 77-84 |
+| projection | q4_K | 4096x2048, 2048x4096 (Qwen3-Coder) | 4.7 | 63-65 | 75-83 |
+| small | q8_0 / q5_0 | 512x2880 (gpt-oss) | 1.0-1.6 | 41-44 (fp16) | 54-66 |
+| small | q6_K / q5_K / q4_K | 512x2048, 2048x512 | 0.6-0.9 | 30-40 | 38-49 |
+| router | f32 | 128-256 x 2048-2816 | 1.0-2.1 | 51-61 | 73-78 |
+| MoE gate+up / down | mxfp4 | 2880x2880 x4 (gpt-oss) | 17.6 | 44 (fp16) | 70 |
+| MoE gate / up | iq3_s | 1408x2816 x8 (Gemma-4) | 13.6 | 37 (fp16) | 64 |
+| MoE down | iq4_nl | 2816x704 x8 (Gemma-4) | 8.9 | 40 (fp16) | 44 |
+| MoE down | q4_K | 2048x768 x8 (Qwen3-Coder) | 7.1 | 60 | 82 |
+| MoE down | q3_K | 2048x768 x8 (Qwen3-Coder) | 5.4 | 41 | 67 |
+| MoE gate / up | q2_K | 768x2048 x8 (Qwen3-Coder) | 4.1 | 59 | 76 |
+| MoE down | iq3_s | 2048x512 x8 (Qwen3.6 IQ3_S) | 3.6 | 33 | 58 |
+| MoE gate / up | iq2_s | 512x2048 x8 (Qwen3.6 IQ3_S) | 2.7 | 35 | 55 |
+| MoE down | iq2_s | 2048x512 x8 (Qwen3.6 IQ2_XXS) | 2.7 | 36 | 50 |
+| MoE gate / up | iq2_xxs | 512x2048 x8 (Qwen3.6 IQ2_XXS) | 2.2 | 32 | 54 |
+
+All mat-vecs together, per token (GB/s, share of GPU time):
+
+| model | Meteor | Lunar |
+|---|---|---|
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 49 (77%) | 70 (81%) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 49 (81%) | 74 (83%) |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 56 (80%) | 78 (84%) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 55 (87%) | 83 (88%) |
+| gpt-oss-20b UD-Q4_K_XL | 51 (95%) | 79 (94%) |
+
+- Size decides more than the type: the large output matrices reach about 70 GB/s on Meteor Lake and about 100 GB/s on
+  Lunar Lake, matrices under 1 MB and small MoE experts drop to 30-40 / 40-55 GB/s.
+- At similar sizes the IQ types (iq2_s, iq2_xxs, iq3_s) are slower than K-quants (q2_K, q4_K) on both machines.
+- Lowest for their size: Meteor Lake mxfp4 (44 GB/s at 17.6 MB, 58% of gpt-oss token time) and iq3_s at k=2816 (fp16
+  path, MMVQ was slower there); Lunar Lake iq4_nl MoE down (44 GB/s at 8.9 MB, 13% of Gemma-4 token time).
+
 ### What the profiles say (Lunar Lake, tg)
 
 - Large dense mat-vecs (lm_head, big FFNs) reach about 100 GB/s of the ~136 GB/s theoretical bandwidth.
