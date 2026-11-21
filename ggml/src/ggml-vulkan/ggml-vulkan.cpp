@@ -1281,6 +1281,22 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         result.shmem_staging = 0;
     }
 
+    // Xe-LPG iGPU (Meteor Lake), token generation (incl. GQA rows): 256 threads per workgroup instead of 128.
+    // Qwen3.6-35B-A3B q8_0 cache, FA at KV 16384: 1.31 -> 0.84 ms; tg64 at depth 16384: 15.2 -> 16.6 t/s.
+    // Qwen3-Coder-30B-A3B tg64 at depth 4096: 14.8 -> 20.0 t/s. GGML_VK_XE1_FA_DECODE_WG128=1 keeps 128.
+    if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 && device->uma &&
+        n_rows <= 8 && result.workgroup_size == 128) {
+        static const bool keep_default = getenv("GGML_VK_XE1_FA_DECODE_WG128") != nullptr;
+        vk_fa_tuning_params t = result;
+        t.workgroup_size = 256;
+        const uint32_t cols_per_iter = t.workgroup_size / t.d_split / t.row_split;
+        if (!keep_default && t.block_cols % cols_per_iter == 0 &&
+            (t.disable_subgroups || t.workgroup_size % t.subgroup_size == 0) &&
+            ggml_vk_flash_attn_scalar_shmem_support(device, t, hsk, hsv, f32acc, k_type, v_type)) {
+            result = t;
+        }
+    }
+
     // Xe-LPG iGPU (Meteor Lake), head size 256 with a quantized K read through integer dot products
     // (e.g. a q8_0 KV cache): 16 rows and 256 threads per workgroup. Qwen3.6-35B-A3B pp512 at depth 16384:
     // 54 -> 69 t/s, at depth 4096: 107 -> 120 t/s. The f16 shader gets slower with this shape, so it keeps the default.
