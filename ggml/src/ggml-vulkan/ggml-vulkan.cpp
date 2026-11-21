@@ -2056,6 +2056,8 @@ static uint32_t ggml_vk_xe2_mmvq_rows(ggml_type t, bool id) {
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ3_S: return id ? 16 : 0;
+        // IQ4_NL MoE: 4 rows with 8 lanes per row (see mmvq_lanes), Gemma-4 26B-A4B down (m=2816, k=704)
+        case GGML_TYPE_IQ4_NL: return id ? 4 : 0;
         default:             return 0;
     }
 }
@@ -3622,9 +3624,11 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     // Only for the single-subgroup workgroup; lanes * K_PER_ITER must be a multiple of 32.
     auto const &mmvq_lanes = [&](ggml_type t, bool id, uint32_t wg_size, shader_reduction_mode r) -> uint32_t {
         uint32_t lanes = id ? device->mmvq_id_lanes_ovr[t] : device->mmvq_lanes_ovr[t];
-        if (lanes == 0 && id && device->mmvq_xe2_tuned && t == GGML_TYPE_IQ3_S) {
+        if (lanes == 0 && id && device->mmvq_xe2_tuned && (t == GGML_TYPE_IQ3_S || t == GGML_TYPE_IQ4_NL)) {
             // Arc 140V tg128: Gemma4 26B-A4B gate_up (k=2816) 300 -> 245 us, Qwen3.6 35B-A3B down (k=512) 81 -> 76 us.
-            // IQ4_NL got slower with fewer lanes per row (k=704 down: 202 -> 245 us at 4 lanes, 349 us at 2).
+            // IQ4_NL, Gemma4 26B-A4B down (k=704 = 22 blocks, so a full subgroup per row leaves 10 lanes idle):
+            // with 4 rows per workgroup 237 -> 156 us at 8 lanes (4 lanes x 8 rows 185, 2 x 16 200, 16 x 2 257);
+            // the fewer lanes need as many rows as row slots, with the old 2 rows they looked slower.
             lanes = 8;
         }
         if (lanes == 0 || r != SHADER_REDUCTION_MODE_SUBGROUP || !device->subgroup_shuffle || lanes >= wg_size || wg_size % lanes != 0) {
