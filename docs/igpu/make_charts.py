@@ -112,27 +112,27 @@ save(fig, "igpu-meteor-lake.png",
      "Run-to-run noise is 5-10%. Details: README-igpu.md")
 
 # ---------------- Lunar Lake ----------------
-# bench-compare.ps1, 2026-11-21: Core Ultra 7 268V, driver 32.0.101.9028, upstream 44c20b1 vs fork 02d5e70,
-# 3 alternating rounds at depth 0 (2 at depth 16384), medians (upstream had one slow round for two models).
-LNL_MODELS = ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_XXS", "Qwen3-Coder-30B-A3B UD-Q2_K_XL",
+# bench-compare.ps1, 2026-11-21 (second run, IQ3_S re-downloaded): Core Ultra 7 268V, driver 32.0.101.9028,
+# upstream 44c20b1 vs fork 02d5e70, 3 alternating rounds at depth 0 (2 at depth 16384), medians.
+LNL_MODELS = ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S", "Qwen3-Coder-30B-A3B UD-Q2_K_XL",
               "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"]
 fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
                         gridspec_kw={"height_ratios": [5, 5, 2.2], "hspace": 0.75})
 panel(axs[0], "Prefill",
       "pp512, llama-bench defaults · 3 alternating rounds, median",
       LNL_MODELS,
-      [("upstream 44c20b1", BASE, [644.8, 616.0, 845.0, 821.7, 951.6]),
-       ("this fork 02d5e70", FORK, [642.8, 624.8, 852.3, 817.8, 972.8])])
+      [("upstream 44c20b1", BASE, [640.8, 634.1, 842.7, 821.8, 980.5]),
+       ("this fork 02d5e70", FORK, [633.8, 630.6, 853.0, 826.1, 975.9])])
 panel(axs[1], "Token generation",
       "tg128, llama-bench defaults · 3 alternating rounds, median",
       LNL_MODELS,
-      [("upstream 44c20b1", BASE, [25.5, 23.9, 41.4, 21.5, 31.3]),
-       ("this fork 02d5e70", FORK, [36.3, 31.7, 46.0, 23.1, 33.0])])
+      [("upstream 44c20b1", BASE, [25.8, 23.6, 41.2, 21.4, 31.5]),
+       ("this fork 02d5e70", FORK, [36.6, 32.7, 46.4, 23.1, 33.0])])
 panel(axs[2], "Long context: 16k tokens in the KV cache",
-      "Qwen3.6-35B-A3B UD-IQ3_XXS, -d 16384 -fa 1 -ctk q8_0 -ctv q8_0 · 2 alternating rounds",
+      "Qwen3.6-35B-A3B UD-IQ3_S, -d 16384 -fa 1 -ctk q8_0 -ctv q8_0 · 2 alternating rounds",
       ["pp512", "tg128"],
-      [("upstream 44c20b1", BASE, [162.4, 18.5]),
-       ("this fork 02d5e70", FORK, [444.9, 27.6])])
+      [("upstream 44c20b1", BASE, [159.6, 18.5]),
+       ("this fork 02d5e70", FORK, [450.5, 28.4])])
 fig.suptitle("Lunar Lake (Core Ultra 7 268V, Arc 140V) · llama.cpp-igpu", x=0.01, ha="left",
              fontsize=14, fontweight="bold", y=0.985)
 fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
