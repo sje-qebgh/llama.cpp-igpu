@@ -55,8 +55,11 @@ Qwen3.6-35B-A3B UD-IQ3_S, `llama-bench` defaults (`-ub 512`, flash attention aut
 | pp512 at depth 16384, q8_0 cache | 50.5 | 113.3 |
 | tg128 at depth 16384, q8_0 cache | 12.3 | 17.3 |
 
-The fork's prefill numbers are higher than in the older tables below (e.g. pp512 at depth 16384 with a q8_0 cache: 69
-then, 113 now). The driver changed in between (32.0.101.8991 -> 9028); the older tables were not re-measured.
+The fork's prefill numbers are higher than in the older tables below (pp512 about 210 now, 123-145 then; pp512 at
+depth 16384 with a q8_0 cache: 69 then, 113 now). It is not the rebase: the release before it (4ea9498) also gives
+pp512 205-215 now. Between the measurements the driver changed (32.0.101.8991 -> 9028) and the power mode was set to
+best performance; which of the two it is was not separated. Upstream changed much less (pp512 74.6 then, 79.6 now).
+The older tables were not re-measured.
 
 ### Prefill, Meteor Lake
 
@@ -295,10 +298,10 @@ measuring a baseline.
   per expert and better use of each matmul tile. Measured with Qwen3.6-35B-A3B UD-IQ3_S, pp2048 (5095e8b):
   Lunar Lake `-ub 512` 631, `-ub 1024` 711, `-ub 2048` 671 t/s; Meteor Lake 142, 155, 160 t/s.
   So `-b 2048 -ub 1024` on Lunar Lake, `-b 2048 -ub 2048` on Meteor Lake (Gemma-4 26B-A4B: `-ub 2048` measured earlier).
-- Meteor Lake, long prompts: with driver 32.0.101.9028, flash attention with a q8_0 KV cache was the fastest setting
-  measured (Qwen3.6 pp512 at 16k context: 113 t/s, f16 cache 80 t/s; token generation the same, 17.3 t/s). With the
-  older driver 8991, `-fa off` with an f16 cache was faster (83.8 vs 68.8 t/s); `-fa off` was not re-measured with
-  9028. Without flash attention the KQ matrix is kept in the compute buffer (16 heads x ubatch x context x 4 bytes,
+- Meteor Lake, long prompts: in the latest measurements (driver 32.0.101.9028, best performance power mode), flash
+  attention with a q8_0 KV cache was the fastest setting measured (Qwen3.6 pp512 at 16k context: 113 t/s, f16 cache
+  80 t/s; token generation the same, 17.3 t/s). Earlier (driver 8991), `-fa off` with an f16 cache was faster (83.8
+  vs 68.8 t/s); `-fa off` was not re-measured since. Without flash attention the KQ matrix is kept in the compute buffer (16 heads x ubatch x context x 4 bytes,
   about 0.55 GB at `-ub 512` and 16k, 2.2 GB at `-ub 2048`) and the V cache cannot be quantized.
 - KV cache: q8_0 costs little speed now. Lunar Lake, Qwen3.6 at 16k context: prefill f16 472 / q8_0 445 t/s,
   token generation f16 29.0 / q8_0 27.2 t/s (before: 167 and 23.2). Meteor Lake (no Intel flash attention kernels
