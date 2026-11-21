@@ -83,30 +83,32 @@ def save(fig, name, note):
 
 
 # ---------------- Meteor Lake ----------------
+# bench-compare.ps1, 2026-11-21: Core Ultra 5 135H, driver 32.0.101.9028, upstream 44c20b1 vs fork 02d5e70,
+# 3 alternating rounds at depth 0 (2 at depth 16384), means.
+MTL_MODELS = ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S", "Qwen3-Coder-30B-A3B UD-Q2_K_XL",
+              "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"]
 fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
-                        gridspec_kw={"height_ratios": [3, 4, 5], "hspace": 0.75})
-panel(axs[0], "Prefill vs upstream",
-      "pp512, -ub 512 · same session",
-      ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S", "Gemma-4 26B-A4B UD-IQ4_NL"],
-      [("upstream", BASE, [71.4, 74.6, 83.1]),
-       ("this fork (before the column skip below)", FORK, [152.5, 123.2, 114.7])])
-panel(axs[1], "MoE prefill: skipping unused tile columns",
-      "pp512, -fa 0 · same session, 2 alternating runs · gain on top of the chart above",
-      ["Qwen3-Coder-30B-A3B UD-Q2_K_XL", "Qwen3.6-35B-A3B UD-IQ3_S",
-       "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"],
-      [("before", BASE, [31.6, 80.0, 87.2, 203.4]),
-       ("after", FORK, [67.3, 145.5, 138.5, 223.2])])
-panel(axs[2], "Token generation",
-      "tg128 · same session · fp16 mat-vec measured with GGML_VK_XE1_MMVQ_LEGACY=1",
-      ["Qwen3-Coder-30B-A3B UD-Q2_K_XL", "Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S",
-       "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"],
-      [("fp16 mat-vec, as upstream", BASE, [17.0, 15.3, 14.4, 14.3, 20.5]),
-       ("this fork, per-type default", FORK, [26.3, 21.0, 19.0, 14.1, 20.6])])
-fig.suptitle("Meteor Lake (Core Ultra, Arc Xe-LPG iGPU) · llama.cpp-igpu", x=0.01, ha="left",
+                        gridspec_kw={"height_ratios": [5, 5, 2.2], "hspace": 0.75})
+panel(axs[0], "Prefill",
+      "pp512, llama-bench defaults · 3 alternating rounds",
+      MTL_MODELS,
+      [("upstream 44c20b1", BASE, [75.9, 79.1, 36.0, 90.7, 310.4]),
+       ("this fork 02d5e70", FORK, [228.4, 213.0, 72.9, 187.3, 339.6])])
+panel(axs[1], "Token generation",
+      "tg128, llama-bench defaults · 3 alternating rounds",
+      MTL_MODELS,
+      [("upstream 44c20b1", BASE, [16.2, 15.8, 19.2, 15.3, 21.2]),
+       ("this fork 02d5e70", FORK, [25.1, 20.4, 32.2, 15.2, 21.5])])
+panel(axs[2], "Long context: 16k tokens in the KV cache",
+      "Qwen3.6-35B-A3B UD-IQ3_S, -d 16384 -fa 1 -ctk q8_0 -ctv q8_0 · 2 alternating rounds",
+      ["pp512", "tg128"],
+      [("upstream 44c20b1", BASE, [50.9, 12.3]),
+       ("this fork 02d5e70", FORK, [109.9, 17.0])])
+fig.suptitle("Meteor Lake (Core Ultra 5 135H, Arc Xe-LPG iGPU) · llama.cpp-igpu", x=0.01, ha="left",
              fontsize=14, fontweight="bold", y=0.985)
 fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
 save(fig, "igpu-meteor-lake.png",
-     "Windows, Vulkan, -ngl 99. Each chart compares numbers from one session; the charts come from different sessions.\n"
+     "Windows, Vulkan, -ngl 99, driver 32.0.101.9028, power mode balanced, on AC. All numbers from one session (2026-11-21).\n"
      "Run-to-run noise is 5-10%. Details: README-igpu.md")
 
 # ---------------- Lunar Lake ----------------
