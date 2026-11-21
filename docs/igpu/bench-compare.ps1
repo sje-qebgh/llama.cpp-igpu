@@ -57,7 +57,7 @@ Log "# upstream vs llama.cpp-igpu $Stamp"
 $gpu = (Get-CimInstance Win32_VideoController | Select-Object -First 1)
 Log "- GPU: $($gpu.Name), driver $($gpu.DriverVersion)"
 Log "- CPU: $((Get-CimInstance Win32_Processor | Select-Object -First 1).Name)"
-Log "- power plan: $((powercfg /getactivescheme) -replace '.*\((.*)\).*','$1'), power mode (AC): $(Power-Mode), on AC: $((Get-CimInstance -ClassName BatteryStatus -Namespace root/wmi -ErrorAction SilentlyContinue | Select-Object -First 1).PowerOnline)"
+Log "- power plan: $((powercfg /getactivescheme) -replace '.*\((.*)\).*','$1'), Windows power mode (AC): $(Power-Mode) (vendor tools such as Dell Optimizer are not shown), on AC: $((Get-CimInstance -ClassName BatteryStatus -Namespace root/wmi -ErrorAction SilentlyContinue | Select-Object -First 1).PowerOnline)"
 foreach ($k in $Bin.Keys) {
     $v = (& $Bin[$k] --version 2>&1 | Out-String)
     $m = [regex]::Match($v, 'version: [^\r\n]*')

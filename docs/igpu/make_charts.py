@@ -108,7 +108,7 @@ fig.suptitle("Meteor Lake (Core Ultra 5 135H, Arc Xe-LPG iGPU) · llama.cpp-igpu
              fontsize=14, fontweight="bold", y=0.985)
 fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
 save(fig, "igpu-meteor-lake.png",
-     "Windows, Vulkan, -ngl 99, driver 32.0.101.9028, power mode balanced, on AC. All numbers from one session (2026-11-21).\n"
+     "Windows, Vulkan, -ngl 99, driver 32.0.101.9028, Dell Optimizer Ultra Performance, on AC. All numbers from one session (2026-11-21).\n"
      "Run-to-run noise is 5-10%. Details: README-igpu.md")
 
 # ---------------- Lunar Lake ----------------

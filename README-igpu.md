@@ -41,7 +41,7 @@ The charts are drawn from the tables below by `docs/igpu/make_charts.py`; each c
 
 ### Meteor Lake: upstream vs this fork
 
-`bench-compare.ps1`, 2026-11-21: Core Ultra 5 135H, driver 32.0.101.9028, power mode balanced, on AC. Upstream
+`bench-compare.ps1`, 2026-11-21: Core Ultra 5 135H, driver 32.0.101.9028, Dell Optimizer "Ultra Performance", on AC. Upstream
 44c20b1 vs this fork 02d5e70, `llama-bench` defaults, 3 alternating rounds (2 at depth 16384), mean t/s:
 
 | model | pp512 upstream | pp512 fork | tg128 upstream | tg128 fork |
@@ -55,8 +55,9 @@ The charts are drawn from the tables below by `docs/igpu/make_charts.py`; each c
 
 The fork's prefill numbers are higher than in the older tables below (Qwen3.6 UD-IQ3_S pp512 about 213 now, 123-145
 then; at depth 16384 with a q8_0 cache 69 then, 110 now). It is not the rebase (the release before it, 4ea9498, also
-gives pp512 205-215 now) and not the power mode (this run was in balanced mode). The driver changed in between
-(32.0.101.8991 -> 9028). Upstream changed much less (pp512 74.6 then, 79.1 now). The older tables were not
+gives pp512 205-215 now). In between the driver changed (32.0.101.8991 -> 9028) and the laptop's power setting may
+have differed (Dell Optimizer "Ultra Performance" now; the Windows power mode that the script reads does not show
+it). Which of the two it is was not separated. Upstream changed much less (pp512 74.6 then, 79.1 now). The older tables were not
 re-measured.
 
 ### Prefill, Meteor Lake
