@@ -26,7 +26,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
-| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_XXS, IQ2_S, IQ4_XS, IQ3_S for k < 2048, and MXFP4 MoE with the large workgroup (4 rows per subgroup); fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
+| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_XXS, IQ2_S, IQ4_XS, IQ3_S for k < 2048, MXFP4 MoE and dense Q8_0 with the large workgroup; fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
@@ -252,8 +252,24 @@ Check on the committed build (80c94d5, no patch, 3 alternating rounds of `-r 3`)
 (20.69-21.16) with `GGML_VK_XE1_MMVQ_LEGACY=1` (which also puts the dense Q4_K mat-vecs back on fp16), faster in every round.
 
 The 4-row line was measured twice (the default and an explicit `GGML_VK_MMVQ_ID_ROWS=mxfp4=4`), which shows the
-noise of this run. Gemma-4 IQ3_S gate_up (k=2816) was tried with the same shapes plus lane splits and subgroup 8/16/32;
-none beat fp16 in tg128, so it stays on fp16. Per-op times from the perf logger did not predict tg here (it runs one
+noise of this run.
+
+Dense Q8_0 (Gemma-4 attention, shared FFN and output layer, 60% of its token time) is also faster with MMVQ and the
+large workgroup: every projection shape 15-20% faster per call (2112x2816 118 -> 98 us, 4096x2816 220 -> 179 us),
+the output layer 3%. tg128, 7 alternating rounds after 3 warm-up runs (build 80c94d5 with a test patch):
+
+| Q8_0 dense mat-vec | Gemma-4 26B-A4B UD-IQ4_NL | gpt-oss-20b UD-Q4_K_XL |
+|---|---|---|
+| fp16 path (old default) | 14.44 (13.14-15.18), last 5 rounds 14.92 | 22.06 (21.71-22.22) |
+| MMVQ, large workgroup, 2 rows (new default) | 15.83 (14.80-16.23), last 5 rounds 16.02 | 22.12 (21.67-22.48) |
+| MMVQ, large workgroup, 1 row | 14.43 (12.96-15.04) | 21.50 (21.30-21.80) |
+| MMVQ, large workgroup, 4 rows | 15.93 (14.97-16.29) | 22.15 (21.55-22.45) |
+
+The first two fp16 rounds of Gemma-4 were slow (13.1, 13.3), so the last 5 rounds are given as well (+7%). gpt-oss
+gains nothing: its Q8_0 is mostly the output layer. Q8_0 MoE stays on fp16.
+
+Gemma-4 IQ3_S gate_up (k=2816) and IQ4_NL down (k=704) were tried with the default shape, the large workgroup, lane
+splits and subgroup 8/16/32; none beat fp16 in tg128 (Gemma-4 fp16 15.09, MMVQ 14.70-14.95), so they stay on fp16. Per-op times from the perf logger did not predict tg here (it runs one
 op at a time): some shapes were faster per call and 20% slower in tg.
 
 ### Token generation with flash attention on Meteor Lake
@@ -375,7 +391,7 @@ All mat-vecs together, per token (GB/s, share of GPU time):
 - `GGML_VK_MMVQ_SG`: subgroup size for the MMVQ pipelines (Intel), e.g. `16`
 - `GGML_VK_MMVQ_DEBUG=1`: log once per shape whether a mat-vec took the MMVQ path and why
 - `GGML_VK_XE1_MMVQ_LEGACY=1`: upstream MMVQ selection on Xe-LPG iGPUs with the Windows driver (fp16 for every type,
-  also no large workgroup for MXFP4 MoE)
+  also no large workgroup for MXFP4 MoE and dense Q8_0)
 
 ### Knobs for experiments (Vulkan, MMQ / prefill, GPUs without matrix cores)
 
