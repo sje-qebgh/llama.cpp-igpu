@@ -316,49 +316,56 @@ Bytes of weights read per call / GPU time per call, from `GGML_VK_PERF_LOGGER=1`
 (`prof-tg.ps1`, 5 models). MoE rows count the experts used per token (8, gpt-oss 4). Meteor Lake: Core Ultra 5 135H,
 driver 32.0.101.9028, build 9e1b619. Lunar Lake: Core Ultra 7 268V, driver 32.0.101.9028, build 963be5f. On Lunar
 Lake every type runs MMVQ; on Meteor Lake the path is chosen per type (fp16 = dequantizing mat-vec).
+Theoretical bandwidth: Meteor Lake DDR5-5600, 2 x 64 bit = 89.6 GB/s; Lunar Lake LPDDR5X-8533, 128 bit = 136.5 GB/s.
+Rows marked "new" were measured after the profile run with the current defaults: Meteor Lake Q8_0 dense and MXFP4
+MoE with MMVQ and the large workgroup (`mtl-q8.ps1`, build 80c94d5 + test patch), Lunar Lake IQ4_NL MoE down with
+8 lanes x 4 rows (`lnl-iq4nl.ps1`).
 
-| layer | type | m x k (model) | MB per call | Meteor GB/s | Lunar GB/s |
+| layer | type | m x k (model) | MB per call | Meteor GB/s (% of 89.6) | Lunar GB/s (% of 136.5) |
 |---|---|---|---|---|---|
-| output | q8_0 | 262144x2816 (Gemma-4) | 784 | 71 (fp16) | 104 |
-| output | q8_0 | 201088x2880 (gpt-oss) | 615 | 69 (fp16) | 103 |
-| output | q6_K | 248320x2048 (Qwen3.6 IQ3_S) | 417 | 68 (fp16) | 100 |
-| output | q4_K | 248320x2048 (Qwen3.6 IQ2_XXS) | 286 | 73 | 91 |
-| output | q6_K | 151936x2048 (Qwen3-Coder) | 255 | 68 (fp16) | 101 |
-| projection | q8_0 | 8192x2816, 2816x8192 (Gemma-4) | 24.5 | 58-61 (fp16) | 97-99 |
-| projection | q6_K | 8192x2048 (Qwen3.6 IQ3_S) | 13.8 | 61 (fp16) | 91 |
-| projection | q8_0 | 4096x2816, 2816x4096 (Gemma-4) | 12.3 | 59-60 (fp16) | 94-96 |
-| projection | q5_K | 8192x2048 (Qwen3.6 IQ2_XXS) | 11.5 | 66 | 83 |
-| projection | q6_K | 2880x4096 (gpt-oss) | 9.7 | 58 (fp16) | 92 |
-| projection | q5_0 | 4096x2880 (gpt-oss) | 8.1 | 54 (fp16) | 91 |
-| projection | q6_K | 4096x2048, 2048x4096 (Qwen3.6, Qwen3-Coder) | 6.9 | 44-55 (fp16) | 75-89 |
-| projection | q4_K | 2880x4096 (gpt-oss) | 6.6 | 64 | 85 |
-| projection | q8_0 | 2112x2816, 2048x2816 (Gemma-4) | 6.1-6.3 | 57-58 (fp16) | 91-92 |
-| projection | q5_K | 4096x2048, 2048x4096 (Qwen3.6 IQ2_XXS) | 5.8 | 45-54 | 77-84 |
-| projection | q4_K | 4096x2048, 2048x4096 (Qwen3-Coder) | 4.7 | 63-65 | 75-83 |
-| small | q8_0 / q5_0 | 512x2880 (gpt-oss) | 1.0-1.6 | 41-44 (fp16) | 54-66 |
-| small | q6_K / q5_K / q4_K | 512x2048, 2048x512 | 0.6-0.9 | 30-40 | 38-49 |
-| router | f32 | 128-256 x 2048-2816 | 1.0-2.1 | 51-61 | 73-78 |
-| MoE gate+up / down | mxfp4 | 2880x2880 x4 (gpt-oss) | 17.6 | 44 (fp16) | 70 |
-| MoE gate / up | iq3_s | 1408x2816 x8 (Gemma-4) | 13.6 | 37 (fp16) | 64 |
-| MoE down | iq4_nl | 2816x704 x8 (Gemma-4) | 8.9 | 40 (fp16) | 44 |
-| MoE down | q4_K | 2048x768 x8 (Qwen3-Coder) | 7.1 | 60 | 82 |
-| MoE down | q3_K | 2048x768 x8 (Qwen3-Coder) | 5.4 | 41 | 67 |
-| MoE gate / up | q2_K | 768x2048 x8 (Qwen3-Coder) | 4.1 | 59 | 76 |
-| MoE down | iq3_s | 2048x512 x8 (Qwen3.6 IQ3_S) | 3.6 | 33 | 58 |
-| MoE gate / up | iq2_s | 512x2048 x8 (Qwen3.6 IQ3_S) | 2.7 | 35 | 55 |
-| MoE down | iq2_s | 2048x512 x8 (Qwen3.6 IQ2_XXS) | 2.7 | 36 | 50 |
-| MoE gate / up | iq2_xxs | 512x2048 x8 (Qwen3.6 IQ2_XXS) | 2.2 | 32 | 54 |
+| output | q8_0 | 262144x2816 (Gemma-4) | 784 | 71 (79%) (MMVQ, new) | 104 (76%) |
+| output | q8_0 | 201088x2880 (gpt-oss) | 615 | 71 (79%) (MMVQ, new) | 103 (75%) |
+| output | q6_K | 248320x2048 (Qwen3.6 IQ3_S) | 417 | 68 (76%) (fp16) | 100 (73%) |
+| output | q4_K | 248320x2048 (Qwen3.6 IQ2_XXS) | 286 | 73 (81%) | 91 (67%) |
+| output | q6_K | 151936x2048 (Qwen3-Coder) | 255 | 68 (76%) (fp16) | 101 (74%) |
+| projection | q8_0 | 8192x2816, 2816x8192 (Gemma-4) | 24.5 | 68-71 (76-79%) (MMVQ, new) | 97-99 (71-73%) |
+| projection | q6_K | 8192x2048 (Qwen3.6 IQ3_S) | 13.8 | 61 (68%) (fp16) | 91 (67%) |
+| projection | q8_0 | 4096x2816, 2816x4096 (Gemma-4) | 12.3 | 67-68 (75-76%) (MMVQ, new) | 94-96 (69-70%) |
+| projection | q5_K | 8192x2048 (Qwen3.6 IQ2_XXS) | 11.5 | 66 (74%) | 83 (61%) |
+| projection | q6_K | 2880x4096 (gpt-oss) | 9.7 | 58 (65%) (fp16) | 92 (67%) |
+| projection | q5_0 | 4096x2880 (gpt-oss) | 8.1 | 54 (60%) (fp16) | 91 (67%) |
+| projection | q6_K | 4096x2048, 2048x4096 (Qwen3.6, Qwen3-Coder) | 6.9 | 44-55 (49-61%) (fp16) | 75-89 (55-65%) |
+| projection | q4_K | 2880x4096 (gpt-oss) | 6.6 | 64 (71%) | 85 (62%) |
+| projection | q8_0 | 2112x2816, 2048x2816 (Gemma-4) | 6.1-6.3 | 65-67 (73-75%) (MMVQ, new) | 91-92 (67%) |
+| projection | q5_K | 4096x2048, 2048x4096 (Qwen3.6 IQ2_XXS) | 5.8 | 45-54 (50-60%) | 77-84 (56-62%) |
+| projection | q4_K | 4096x2048, 2048x4096 (Qwen3-Coder) | 4.7 | 63-65 (70-73%) | 75-83 (55-61%) |
+| small | q8_0 / q5_0 | 512x2880 (gpt-oss) | 1.0-1.6 | 41-44 (46-49%) q5_0 fp16, 51 (57%) q8_0 MMVQ new | 54-66 (40-48%) |
+| small | q6_K / q5_K / q4_K | 512x2048, 2048x512 | 0.6-0.9 | 30-40 (33-45%) | 38-49 (28-36%) |
+| router | f32 | 128-256 x 2048-2816 | 1.0-2.1 | 51-61 (57-68%) | 73-78 (53-57%) |
+| MoE gate+up / down | mxfp4 | 2880x2880 x4 (gpt-oss) | 17.6 | 49 (55%) (MMVQ, new) | 70 (51%) |
+| MoE gate / up | iq3_s | 1408x2816 x8 (Gemma-4) | 13.6 | 37 (41%) (fp16) | 64 (47%) |
+| MoE down | iq4_nl | 2816x704 x8 (Gemma-4) | 8.9 | 40 (45%) (fp16) | 68 (50%) (new) |
+| MoE down | q4_K | 2048x768 x8 (Qwen3-Coder) | 7.1 | 60 (67%) | 82 (60%) |
+| MoE down | q3_K | 2048x768 x8 (Qwen3-Coder) | 5.4 | 41 (46%) | 67 (49%) |
+| MoE gate / up | q2_K | 768x2048 x8 (Qwen3-Coder) | 4.1 | 59 (66%) | 76 (56%) |
+| MoE down | iq3_s | 2048x512 x8 (Qwen3.6 IQ3_S) | 3.6 | 33 (37%) | 58 (42%) |
+| MoE gate / up | iq2_s | 512x2048 x8 (Qwen3.6 IQ3_S) | 2.7 | 35 (39%) | 55 (40%) |
+| MoE down | iq2_s | 2048x512 x8 (Qwen3.6 IQ2_XXS) | 2.7 | 36 (40%) | 50 (37%) |
+| MoE gate / up | iq2_xxs | 512x2048 x8 (Qwen3.6 IQ2_XXS) | 2.2 | 32 (36%) | 54 (40%) |
 
-All mat-vecs together, per token (GB/s, share of GPU time):
+All mat-vecs together, per token, from the profile run (before the "new" rows above):
 
-| model | Meteor | Lunar |
+| model | Meteor GB/s (% of 89.6) | Lunar GB/s (% of 136.5) |
 |---|---|---|
-| Qwen3.6-35B-A3B UD-IQ2_XXS | 49 (77%) | 70 (81%) |
-| Qwen3.6-35B-A3B UD-IQ3_S | 49 (81%) | 74 (83%) |
-| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 56 (80%) | 78 (84%) |
-| Gemma-4 26B-A4B UD-IQ4_NL | 55 (87%) | 83 (88%) |
-| gpt-oss-20b UD-Q4_K_XL | 51 (95%) | 79 (94%) |
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 49 (55%), 77% of GPU time | 70 (51%), 81% of GPU time |
+| Qwen3.6-35B-A3B UD-IQ3_S | 49 (55%), 81% of GPU time | 74 (54%), 83% of GPU time |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 56 (62%), 80% of GPU time | 78 (57%), 84% of GPU time |
+| Gemma-4 26B-A4B UD-IQ4_NL | 55 (61%), 87% of GPU time | 83 (61%), 88% of GPU time |
+| gpt-oss-20b UD-Q4_K_XL | 51 (57%), 95% of GPU time | 79 (58%), 94% of GPU time |
 
+- Share of the theoretical bandwidth: the largest reads (output layers, 255-784 MB) reach 76-81% on Meteor Lake and
+  73-76% on Lunar Lake, which is about the practical ceiling of a mat-vec here. Projections of 6-25 MB reach 60-79% /
+  61-73%, small MoE experts (2-4 MB) 36-46% / 37-49%. Whole tokens average 55-62% / 51-61% of the theoretical bandwidth.
 - Size decides more than the type: the large output matrices reach about 70 GB/s on Meteor Lake and about 100 GB/s on
   Lunar Lake, matrices under 1 MB and small MoE experts drop to 30-40 / 40-55 GB/s.
 - At similar sizes the IQ types (iq2_s, iq2_xxs, iq3_s) are slower than K-quants (q2_K, q4_K) on both machines.
