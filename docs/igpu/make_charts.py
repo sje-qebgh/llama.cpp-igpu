@@ -112,8 +112,8 @@ save(fig, "igpu-meteor-lake.png",
      "Run-to-run noise is 5-10%. Details: README-igpu.md")
 
 # ---------------- Lunar Lake ----------------
-# bench-compare.ps1, 2026-11-21 (second run, IQ3_S re-downloaded): Core Ultra 7 268V, driver 32.0.101.9028,
-# upstream 8d60873 vs fork 02d5e70, 3 alternating rounds at depth 0 (2 at depth 16384), medians.
+# bench-compare.ps1, 2026-11-22: Core Ultra 7 268V, driver 32.0.101.9028,
+# upstream 8d60873 vs fork 63cce34, 3 alternating rounds at depth 0 (2 at depth 16384), medians.
 LNL_MODELS = ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S", "Qwen3-Coder-30B-A3B UD-Q2_K_XL",
               "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"]
 fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
@@ -121,21 +121,21 @@ fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
 panel(axs[0], "Prefill",
       "pp512, llama-bench defaults · 3 alternating rounds, median",
       LNL_MODELS,
-      [("upstream 44c20b1", BASE, [640.8, 634.1, 842.7, 821.8, 980.5]),
-       ("this fork 02d5e70", FORK, [633.8, 630.6, 853.0, 826.1, 975.9])])
+      [("upstream 8d60873", BASE, [650.3, 621.1, 854.9, 822.2, 982.3]),
+       ("this fork 63cce34", FORK, [653.0, 630.3, 855.8, 824.7, 975.9])])
 panel(axs[1], "Token generation",
       "tg128, llama-bench defaults · 3 alternating rounds, median",
       LNL_MODELS,
-      [("upstream 44c20b1", BASE, [25.8, 23.6, 41.2, 21.4, 31.5]),
-       ("this fork 02d5e70", FORK, [36.6, 32.7, 46.4, 23.1, 33.0])])
+      [("upstream 8d60873", BASE, [25.7, 23.4, 41.8, 21.7, 31.4]),
+       ("this fork 63cce34", FORK, [36.5, 32.5, 46.7, 24.4, 32.9])])
 panel(axs[2], "Long context: 16k tokens in the KV cache",
       "Qwen3.6-35B-A3B UD-IQ3_S, -d 16384 -fa 1 -ctk q8_0 -ctv q8_0 · 2 alternating rounds",
       ["pp512", "tg128"],
-      [("upstream 44c20b1", BASE, [159.6, 18.5]),
-       ("this fork 02d5e70", FORK, [450.5, 28.4])])
+      [("upstream 8d60873", BASE, [164.2, 18.3]),
+       ("this fork 63cce34", FORK, [446.1, 28.4])])
 fig.suptitle("Lunar Lake (Core Ultra 7 268V, Arc 140V) · llama.cpp-igpu", x=0.01, ha="left",
              fontsize=14, fontweight="bold", y=0.985)
 fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
 save(fig, "igpu-lunar-lake.png",
-     "Windows, Vulkan, -ngl 99, driver 32.0.101.9028, Windows power mode best performance, on AC. One session (2026-11-21).\n"
+     "Windows, Vulkan, -ngl 99, driver 32.0.101.9028, Windows power mode best performance, on AC. One session (2026-11-22).\n"
      "Run-to-run noise is 5-10%. Details: README-igpu.md")

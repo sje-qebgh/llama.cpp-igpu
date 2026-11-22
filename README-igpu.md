@@ -66,18 +66,20 @@ re-measured.
 
 ### Lunar Lake: upstream vs this fork
 
-`bench-compare.ps1`, 2026-11-21: Core Ultra 7 268V (Arc 140V), driver 32.0.101.9028, Windows power mode best
-performance, on AC. Upstream 44c20b1 vs this fork 02d5e70, `llama-bench` defaults, 3 alternating rounds (2 at depth
+`bench-compare.ps1`, 2026-11-22: Core Ultra 7 268V (Arc 140V), driver 32.0.101.9028, Windows power mode best
+performance, on AC. Upstream 8d60873 vs this fork 63cce34, `llama-bench` defaults, 3 alternating rounds (2 at depth
 16384), median t/s:
 
 | model | pp512 upstream | pp512 fork | tg128 upstream | tg128 fork |
 |---|---|---|---|---|
-| Qwen3.6-35B-A3B UD-IQ2_XXS | 640.8 | 633.8 (0.99x) | 25.8 | 36.6 (1.42x) |
-| Qwen3.6-35B-A3B UD-IQ3_S | 634.1 | 630.6 (0.99x) | 23.6 | 32.7 (1.39x) |
-| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 842.7 | 853.0 (1.01x) | 41.2 | 46.4 (1.13x) |
-| Gemma-4 26B-A4B UD-IQ4_NL | 821.8 | 826.1 (1.01x) | 21.4 | 23.1 (1.08x) |
-| gpt-oss-20b UD-Q4_K_XL | 980.5 | 975.9 (1.00x) | 31.5 | 33.0 (1.05x) |
-| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 159.6 | 450.5 (2.82x) | 18.5 | 28.4 (1.54x) |
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 650.3 | 653.0 (1.00x) | 25.7 | 36.5 (1.42x) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 621.1 | 630.3 (1.01x) | 23.4 | 32.5 (1.39x) |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 854.9 | 855.8 (1.00x) | 41.8 | 46.7 (1.12x) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 822.2 | 824.7 (1.00x) | 21.7 | 24.4 (1.12x) |
+| gpt-oss-20b UD-Q4_K_XL | 982.3 | 975.9 (0.99x) | 31.4 | 32.9 (1.05x) |
+| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 164.2 | 446.1 (2.72x) | 18.3 | 28.4 (1.55x) |
+
+Gemma-4 tg went from 1.08x (2026-11-21, fork 02d5e70) to 1.12x with the IQ4_NL MoE down launch shape (8 lanes x 4 rows).
 
 On Lunar Lake prefill at short context runs on the same FP16 XMX matmuls as upstream; the fork's gains are token
 generation and long context with a quantized KV cache. Note: the older Lunar Lake tables below that name
