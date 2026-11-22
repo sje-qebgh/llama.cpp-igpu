@@ -242,6 +242,9 @@ workgroup, which is now the default for MXFP4 `mul_mat_vec_id` on this GPU. gpt-
 | MMVQ, large workgroup, subgroup 16 | 17.85 (17.69-17.97) | 512 |
 | MMVQ, large workgroup, subgroup 32 | 18.93 (18.37-19.14) | 482 |
 
+Check on the committed build (80c94d5, no patch, 3 alternating rounds of `-r 3`): 22.15 t/s (21.81-22.46) vs 20.88
+(20.69-21.16) with `GGML_VK_XE1_MMVQ_LEGACY=1` (which also puts the dense Q4_K mat-vecs back on fp16), faster in every round.
+
 The 4-row line was measured twice (the default and an explicit `GGML_VK_MMVQ_ID_ROWS=mxfp4=4`), which shows the
 noise of this run. Gemma-4 IQ3_S gate_up (k=2816) was tried with the same shapes plus lane splits and subgroup 8/16/32;
 none beat fp16 in tg128, so it stays on fp16. Per-op times from the perf logger did not predict tg here (it runs one
