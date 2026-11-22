@@ -83,27 +83,27 @@ def save(fig, name, note):
 
 
 # ---------------- Meteor Lake ----------------
-# bench-compare.ps1, 2026-11-22: Core Ultra 5 135H, driver 32.0.101.9028, upstream 8d60873 vs fork 80c94d5,
-# 3 alternating rounds at depth 0 (2 at depth 16384), means.
+# bench-compare.ps1, 2026-11-22 (second run): Core Ultra 5 135H, driver 32.0.101.9028, upstream 8d60873 vs fork 9db50c9,
+# 3 alternating rounds at depth 0 (2 at depth 16384), medians.
 MTL_MODELS = ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S", "Qwen3-Coder-30B-A3B UD-Q2_K_XL",
               "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"]
 fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
                         gridspec_kw={"height_ratios": [5, 5, 2.2], "hspace": 0.75})
 panel(axs[0], "Prefill",
-      "pp512, llama-bench defaults · 3 alternating rounds",
+      "pp512, llama-bench defaults · 3 alternating rounds, median",
       MTL_MODELS,
-      [("upstream 8d60873", BASE, [69.4, 79.0, 35.7, 83.4, 307.9]),
-       ("this fork 80c94d5", FORK, [222.3, 209.7, 73.6, 169.6, 333.0])])
+      [("upstream 8d60873", BASE, [68.2, 77.8, 33.9, 86.9, 303.7]),
+       ("this fork 9db50c9", FORK, [229.3, 209.6, 71.6, 187.9, 331.9])])
 panel(axs[1], "Token generation",
-      "tg128, llama-bench defaults · 3 alternating rounds",
+      "tg128, llama-bench defaults · 3 alternating rounds, median",
       MTL_MODELS,
-      [("upstream 8d60873", BASE, [16.0, 14.8, 19.3, 14.4, 20.6]),
-       ("this fork 80c94d5", FORK, [24.6, 20.1, 31.6, 14.0, 21.8])])
+      [("upstream 8d60873", BASE, [15.0, 14.9, 18.7, 14.5, 20.6]),
+       ("this fork 9db50c9", FORK, [23.7, 19.3, 31.4, 16.0, 21.7])])
 panel(axs[2], "Long context: 16k tokens in the KV cache",
       "Qwen3.6-35B-A3B UD-IQ3_S, -d 16384 -fa 1 -ctk q8_0 -ctv q8_0 · 2 alternating rounds",
       ["pp512", "tg128"],
-      [("upstream 8d60873", BASE, [49.1, 12.0]),
-       ("this fork 80c94d5", FORK, [111.2, 16.7])])
+      [("upstream 8d60873", BASE, [48.3, 11.8]),
+       ("this fork 9db50c9", FORK, [109.5, 16.8])])
 fig.suptitle("Meteor Lake (Core Ultra 5 135H, Arc Xe-LPG iGPU) · llama.cpp-igpu", x=0.01, ha="left",
              fontsize=14, fontweight="bold", y=0.985)
 fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
