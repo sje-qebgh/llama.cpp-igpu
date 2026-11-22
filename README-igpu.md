@@ -41,23 +41,27 @@ The charts are drawn from the tables below by `docs/igpu/make_charts.py`; each c
 
 ### Meteor Lake: upstream vs this fork
 
-`bench-compare.ps1`, 2026-11-21: Core Ultra 5 135H, driver 32.0.101.9028, Dell Optimizer "Ultra Performance", on AC. Upstream
-44c20b1 vs this fork 02d5e70, `llama-bench` defaults, 3 alternating rounds (2 at depth 16384), mean t/s:
+`bench-compare.ps1`, 2026-11-22: Core Ultra 5 135H, driver 32.0.101.9028, Dell Optimizer "Ultra Performance", on AC. Upstream
+8d60873 vs this fork 80c94d5, `llama-bench` defaults, 3 alternating rounds (2 at depth 16384), mean t/s:
 
 | model | pp512 upstream | pp512 fork | tg128 upstream | tg128 fork |
 |---|---|---|---|---|
-| Qwen3.6-35B-A3B UD-IQ2_XXS | 75.9 | 228.4 (3.01x) | 16.2 | 25.1 (1.55x) |
-| Qwen3.6-35B-A3B UD-IQ3_S | 79.1 | 213.0 (2.69x) | 15.8 | 20.4 (1.29x) |
-| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 36.0 | 72.9 (2.03x) | 19.2 | 32.2 (1.68x) |
-| Gemma-4 26B-A4B UD-IQ4_NL | 90.7 | 187.3 (2.07x) | 15.3 | 15.2 (0.99x) |
-| gpt-oss-20b UD-Q4_K_XL | 310.4 | 339.6 (1.09x) | 21.2 | 21.5 (1.01x) |
-| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 50.9 | 109.9 (2.16x) | 12.3 | 17.0 (1.38x) |
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 69.4 | 222.3 (3.20x) | 16.0 | 24.6 (1.54x) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 79.0 | 209.7 (2.65x) | 14.8 | 20.1 (1.36x) |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 35.7 | 73.6 (2.06x) | 19.3 | 31.6 (1.64x) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 83.4 | 169.6 (2.03x) | 14.4 | 14.0 (0.97x) |
+| gpt-oss-20b UD-Q4_K_XL | 307.9 | 333.0 (1.08x) | 20.6 | 21.8 (1.06x) |
+| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 49.1 | 111.2 (2.26x) | 12.0 | 16.7 (1.38x) |
 
-The fork's prefill numbers are higher than in the older tables below (Qwen3.6 UD-IQ3_S pp512 about 213 now, 123-145
+gpt-oss tg went from 1.01x (2026-11-21, fork 02d5e70) to 1.06x with MMVQ for the MXFP4 MoE. Gemma-4 varied the most
+in this run (fork tg128 12.6-15.0, pp512 160-180); on this GPU the fork keeps its IQ4_NL and IQ3_S MoE mat-vecs on fp16
+like upstream, so tg is the same within noise.
+
+The fork's prefill numbers are higher than in the older tables below (Qwen3.6 UD-IQ3_S pp512 about 210 now, 123-145
 then; at depth 16384 with a q8_0 cache 69 then, 110 now). It is not the rebase (the release before it, 4ea9498, also
 gives pp512 205-215 now). In between the driver changed (32.0.101.8991 -> 9028) and the laptop's power setting may
 have differed (Dell Optimizer "Ultra Performance" now; the Windows power mode that the script reads does not show
-it). Which of the two it is was not separated. Upstream changed much less (pp512 74.6 then, 79.1 now). The older tables were not
+it). Which of the two it is was not separated. Upstream changed much less (pp512 74.6 then, 79.0 now). The older tables were not
 re-measured.
 
 ### Lunar Lake: upstream vs this fork
