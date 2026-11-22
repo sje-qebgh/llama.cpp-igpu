@@ -268,6 +268,10 @@ the output layer 3%. tg128, 7 alternating rounds after 3 warm-up runs (build 80c
 The first two fp16 rounds of Gemma-4 were slow (13.1, 13.3), so the last 5 rounds are given as well (+7%). gpt-oss
 gains nothing: its Q8_0 is mostly the output layer. Q8_0 MoE stays on fp16.
 
+Check on the committed build (9db50c9, no patch; `test-backend-ops` MUL_MAT 2604/2604, MUL_MAT_ID 1197/1197),
+5 alternating rounds: Gemma-4 15.71 (15.26-15.94) vs 14.81 (14.38-15.02) with `GGML_VK_XE1_MMVQ_LEGACY=1` (1.06x,
+faster in every round; for this model LEGACY changes only the Q8_0 mat-vecs).
+
 Gemma-4 IQ3_S gate_up (k=2816) and IQ4_NL down (k=704) were tried with the default shape, the large workgroup, lane
 splits and subgroup 8/16/32; none beat fp16 in tg128 (Gemma-4 fp16 15.09, MMVQ 14.70-14.95), so they stay on fp16. Per-op times from the perf logger did not predict tg here (it runs one
 op at a time): some shapes were faster per call and 20% slower in tg.
