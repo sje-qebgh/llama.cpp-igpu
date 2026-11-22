@@ -2062,6 +2062,15 @@ static uint32_t ggml_vk_xe2_mmvq_rows(ggml_type t, bool id) {
     }
 }
 
+// Xe-LPG (Meteor Lake, Windows driver): MXFP4 MoE takes the large workgroup (4 rows per subgroup).
+// gpt-oss-20b tg128 t/s: fp16 path 20.82, large 22.27, large + 1 row 20.42, large + subgroup 16 17.85,
+// large + subgroup 32 18.93; the single-subgroup shapes were about 20% slower than fp16.
+static bool ggml_vk_xe1_mmvq_large_wg(const vk_device & device, ggml_type t, bool id) {
+    return id && t == GGML_TYPE_MXFP4 && !device->mmvq_xe1_legacy &&
+           device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 &&
+           device->uma && device->driver_id == vk::DriverId::eIntelProprietaryWindows;
+}
+
 static bool ggml_vk_xe2_mmvq_large_wg(ggml_type t, bool id) {
     if (id) {
         return false;   // MoE experts: a single subgroup with more rows wins
@@ -6881,7 +6890,8 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
         if (ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
         }
-        if (ctx->device->mmvq_xe2_tuned && ggml_vk_xe2_mmvq_large_wg(a_type, true)) {
+        if ((ctx->device->mmvq_xe2_tuned && ggml_vk_xe2_mmvq_large_wg(a_type, true)) ||
+            ggml_vk_xe1_mmvq_large_wg(ctx->device, a_type, true)) {
             dmmv_wg = DMMV_WG_SIZE_LARGE;
         }
         if (ctx->device->mmvq_id_wg_ovr[a_type]) {
@@ -7941,7 +7951,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     }
 }
 
-static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_t n, uint32_t k, ggml_type src0_type) {
+static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_t n, uint32_t k, ggml_type src0_type, bool id = false) {
     if (device->mmvq_mode == 1) {
         return true;
     } else if (device->mmvq_mode == -1) {
@@ -8012,6 +8022,9 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             //   Q2_K 0.30, Q3_K 0.67, Q4_K 0.73-0.89, Q5_K 0.94, IQ2_S 0.14-0.33, IQ4_XS 0.88,
             //   IQ3_S 0.71-0.75 at k=512 but 1.09 at k=2816,
             //   Q8_0 1.12-1.33, MXFP4 1.39, IQ4_NL 1.18, Q6_K 1.03-1.06, Q5_0 0.98.
+            // MXFP4 MoE: with the large workgroup (see ggml_vk_xe1_mmvq_large_wg) gpt-oss-20b
+            // tg128 20.82 -> 22.27 t/s (5 rounds, driver 32.0.101.9028); other shapes were slower.
+            // IQ3_S at k=2816 (Gemma4 26B-A4B gate_up): no shape beat fp16 in tg128.
             // IQ2_XXS: Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 -> 19.70 t/s with GGML_VK_FORCE_MMVQ=1 (4 rounds).
             // IQ2_XS / IQ3_XXS are not measured here yet.
             // GGML_VK_XE1_MMVQ_LEGACY=1 restores the previous behavior (fp16 for every type).
@@ -8026,6 +8039,8 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
                 return true;
             case GGML_TYPE_IQ3_S:
                 return k < 2048;
+            case GGML_TYPE_MXFP4:
+                return id;
             default:
                 return false;
             }
@@ -8073,8 +8088,7 @@ static const char * ggml_vk_mmvq_reason(const vk_device & device, const ggml_ten
     if (!ggml_is_contiguous(src1) || y_non_contig) return "src1 not contiguous";
     if ((src1->ne[0] * src1->ne[1]) % 4 != 0)    return "src1 size not a multiple of 4";
     if (!prec_ok)                                return "src1 precision does not allow q8";
-    if (!ggml_vk_should_use_mmvq(device, m, n, k, src0->type)) return "heuristic (ggml_vk_should_use_mmvq)";
-    GGML_UNUSED(dst);
+    if (!ggml_vk_should_use_mmvq(device, m, n, k, src0->type, dst->op == GGML_OP_MUL_MAT_ID)) return "heuristic (ggml_vk_should_use_mmvq)";
     return "unknown";
 }
 
@@ -9249,7 +9263,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     const bool y_non_contig = !ggml_vk_dim01_contiguous(src1);
 
     const bool f16_f32_kernel = src1->type == GGML_TYPE_F32;
-    bool quantize_y = ctx->device->integer_dot_signed && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8(dst) && ggml_vk_should_use_mmvq(ctx->device, ne01, ne12, ne10, src0->type);
+    bool quantize_y = ctx->device->integer_dot_signed && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8(dst) && ggml_vk_should_use_mmvq(ctx->device, ne01, ne12, ne10, src0->type, true);
 
     vk_pipeline to_fp16_vk_0 = nullptr;
     vk_pipeline to_fp16_vk_1 = nullptr;

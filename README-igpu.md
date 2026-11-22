@@ -26,7 +26,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
-| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_XXS, IQ2_S, IQ4_XS, and IQ3_S for k < 2048; fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
+| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_XXS, IQ2_S, IQ4_XS, IQ3_S for k < 2048, and MXFP4 MoE with the large workgroup (4 rows per subgroup); fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
@@ -230,6 +230,23 @@ it matches the faster of the two other settings for every model.
 | Gemma-4 26B-A4B UD-IQ4_NL | 14.1 | 14.3 | 12.7 |
 | gpt-oss-20b UD-Q4_K_XL | 20.6 | 20.5 | 16.1 |
 
+MXFP4 MoE (gpt-oss) was slower with MMVQ in the single-subgroup shape used above, but faster with the large
+workgroup, which is now the default for MXFP4 `mul_mat_vec_id` on this GPU. gpt-oss-20b UD-Q4_K_XL, tg128,
+5 alternating rounds after 3 warm-up runs, build e2ab895 with a test patch, driver 32.0.101.9028:
+
+| MXFP4 MoE mat-vec | tg128 t/s mean (min-max) | us per call (perf logger) |
+|---|---|---|
+| fp16 path (old default) | 20.82 (19.36-21.40) | 415 |
+| MMVQ, large workgroup, 4 rows (new default) | 22.27 (21.74-22.46) / 22.36 (22.16-22.48) | 374-385 |
+| MMVQ, large workgroup, 1 row | 20.42 (20.15-20.64) | 431 |
+| MMVQ, large workgroup, subgroup 16 | 17.85 (17.69-17.97) | 512 |
+| MMVQ, large workgroup, subgroup 32 | 18.93 (18.37-19.14) | 482 |
+
+The 4-row line was measured twice (the default and an explicit `GGML_VK_MMVQ_ID_ROWS=mxfp4=4`), which shows the
+noise of this run. Gemma-4 IQ3_S gate_up (k=2816) was tried with the same shapes plus lane splits and subgroup 8/16/32;
+none beat fp16 in tg128, so it stays on fp16. Per-op times from the perf logger did not predict tg here (it runs one
+op at a time): some shapes were faster per call and 20% slower in tg.
+
 ### Token generation with flash attention on Meteor Lake
 
 At long context the decode attention read the KV cache at about 11 GB/s (Qwen3.6, depth 16384: 16.6 of 66 ms per
@@ -316,7 +333,8 @@ All mat-vecs together, per token (GB/s, share of GPU time):
 - Size decides more than the type: the large output matrices reach about 70 GB/s on Meteor Lake and about 100 GB/s on
   Lunar Lake, matrices under 1 MB and small MoE experts drop to 30-40 / 40-55 GB/s.
 - At similar sizes the IQ types (iq2_s, iq2_xxs, iq3_s) are slower than K-quants (q2_K, q4_K) on both machines.
-- Lowest for their size: Meteor Lake mxfp4 (44 GB/s at 17.6 MB, 58% of gpt-oss token time) and iq3_s at k=2816 (fp16
+- Lowest for their size: Meteor Lake mxfp4 (44 GB/s at 17.6 MB, 58% of gpt-oss token time; MMVQ with the large
+  workgroup is now the default there, +7% tg) and iq3_s at k=2816 (fp16
   path, MMVQ was slower there); Lunar Lake iq4_nl MoE down (44 GB/s at 8.9 MB, 13% of Gemma-4 token time).
 
 ### What the profiles say (Lunar Lake, tg)
@@ -347,7 +365,8 @@ All mat-vecs together, per token (GB/s, share of GPU time):
   Needs subgroup shuffle; lanes x values per lane must be a multiple of 32, other values are ignored.
 - `GGML_VK_MMVQ_SG`: subgroup size for the MMVQ pipelines (Intel), e.g. `16`
 - `GGML_VK_MMVQ_DEBUG=1`: log once per shape whether a mat-vec took the MMVQ path and why
-- `GGML_VK_XE1_MMVQ_LEGACY=1`: upstream MMVQ selection on Xe-LPG iGPUs with the Windows driver (fp16 for every type)
+- `GGML_VK_XE1_MMVQ_LEGACY=1`: upstream MMVQ selection on Xe-LPG iGPUs with the Windows driver (fp16 for every type,
+  also no large workgroup for MXFP4 MoE)
 
 ### Knobs for experiments (Vulkan, MMQ / prefill, GPUs without matrix cores)
 
