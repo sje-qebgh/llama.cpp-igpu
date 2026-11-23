@@ -471,10 +471,12 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not.
 - Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
 
-- Gated DeltaNet prefill with more than 1024 tokens per call: 8 tokens per block is slower there (Lunar Lake),
-  the cause is not known yet.
 
 ### Not planned
+
+- Gated DeltaNet prefill with more than 1024 tokens per call: 8 tokens per block is slower there (Lunar Lake), the
+  cause is not known. Such calls keep 1 token per block. Only `-ub` above 1024 hits it, and `-ub 2048` is slower than
+  `-ub 1024` even with 1 token per block, so there is little to gain.
 
 - Repacking IQ2/IQ3 blocks at load time into an MMVQ-friendly layout (e.g. the 10-bit IQ2_S grid index in one word
   instead of split over `qs` and `qh`). The Vulkan backend has no repack buffer type, so it would touch tensor upload and
