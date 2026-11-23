@@ -336,6 +336,20 @@ than 8 rows there would turn GQA off for the 8 query heads per KV head. Not chan
 The q8_0 shader is a different shader (integer dot) and reacts differently: d split 4 made the hs 256 prefill 6x
 slower there, 4 rows 2-7x slower.
 
+Real models on the committed build (a6e6b61, no patch; `test-backend-ops` FLASH_ATTN_EXT 5693/5693), depth 8192,
+`mtl-fa-check.ps1`, mean of 2 alternating rounds, t/s. "old tile" is `GGML_VK_XE1_FA_DEFAULT_TILE=1` (all prefill
+tiles back, including the older q8_0 head size 256 one; the head size 512 token generation change stays):
+
+| model | KV | pp512 old tile | pp512 new | tg32 old tile | tg32 new |
+|---|---|---|---|---|---|
+| Gemma-4 26B-A4B UD-IQ4_NL | `-fa 1` f16 | 84.3 | 104.9 (+24%) | 11.79 | 11.99 |
+| Gemma-4 26B-A4B UD-IQ4_NL | `-fa 1` q8_0 | 64.5 | 89.7 (+39%) | 12.76 | 12.60 |
+| Qwen3.6-35B-A3B UD-IQ3_S | `-fa 1` f16 | 113.4 | 135.6 (+20%) | 18.37 | 17.83 |
+| Qwen3.6-35B-A3B UD-IQ3_S | `-fa 1` q8_0 | 114.8 | 136.2 (+19%) | 18.25 | 18.49 |
+
+`-fa 0` f16 at the same depth: Gemma-4 147.8 / 13.64, Qwen3.6 162.9 / 18.64. At depth 8192 the prefill without flash
+attention is still faster on this GPU, and Gemma-4 token generation too.
+
 ### Long context prefill on Meteor Lake (flash attention)
 
 Qwen3.6-35B-A3B UD-IQ3_S, pp512 at depth (`-d`), default `-ub 512`, 2 alternating runs (mean), build c271846 with a
