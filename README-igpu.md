@@ -469,8 +469,6 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   MoE tiles, not from the K-quant decode: dense Q4_K mat-mul ran at 2000-2600 GFLOPS while the MoE ones ran at 100-290.
   SIMD8 and other MoE tiles did not help. Column skipping (above) fixes most of it; the float / coopmat shader
   (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not.
-- Lunar Lake (Xe2): integer XMX (coopmat int8) path for prefill, which upstream enables only on AMD.
-
 
 ### Not planned
 
