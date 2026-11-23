@@ -490,14 +490,31 @@ measuring a baseline.
   per expert and better use of each matmul tile. Measured with Qwen3.6-35B-A3B UD-IQ3_S, pp2048 (5095e8b):
   Lunar Lake `-ub 512` 631, `-ub 1024` 711, `-ub 2048` 671 t/s; Meteor Lake 142, 155, 160 t/s.
   So `-b 2048 -ub 1024` on Lunar Lake, `-b 2048 -ub 2048` on Meteor Lake (Gemma-4 26B-A4B: `-ub 2048` measured earlier).
-- Meteor Lake, long prompts: in the latest measurements (driver 32.0.101.9028), flash
-  attention with a q8_0 KV cache was the fastest setting measured (Qwen3.6 pp512 at 16k context: 110-113 t/s, f16 cache
-  80 t/s; token generation the same, about 17 t/s). Earlier (driver 8991), `-fa off` with an f16 cache was faster (83.8
-  vs 68.8 t/s); `-fa off` was not re-measured since. Without flash attention the KQ matrix is kept in the compute buffer (16 heads x ubatch x context x 4 bytes,
-  about 0.55 GB at `-ub 512` and 16k, 2.2 GB at `-ub 2048`) and the V cache cannot be quantized.
+- Meteor Lake, flash attention: off (`-fa 0`, f16 cache) is faster for Qwen3.6 and Gemma-4 at every depth measured;
+  on for gpt-oss prefill. llama.cpp turns flash attention on by default, so pass `-fa 0` for the first two.
+  `mtl-fa-depth.ps1`, build a6e6b61, one run each, t/s (fa0 f16 / fa1 f16 / fa1 q8_0):
+
+  | model | depth | pp512 | tg32 |
+  |---|---|---|---|
+  | Qwen3.6-35B-A3B UD-IQ3_S | 4096 | **183.5** / 163.3 / 161.6 | 19.0 / 19.3 / 19.2 |
+  | | 8192 | **162.3** / 136.4 / 142.1 | 18.7 / 18.5 / 18.4 |
+  | | 16384 | **120.4** / 96.9 / 91.8 | 17.0 / 17.4 / 16.0 |
+  | Gemma-4 26B-A4B UD-IQ4_NL | 4096 | **160.1** / 127.4 / 117.9 | **15.0** / 13.6 / 13.4 |
+  | | 8192 | **146.0** / 108.5 / 89.2 | **14.1** / 12.4 / 11.8 |
+  | | 16384 | **118.3** / 77.0 / 60.1 | **13.4** / 10.6 / 11.1 |
+  | gpt-oss-20b UD-Q4_K_XL | 4096 | 224.7 / 242.1 / **246.4** | **20.2** / 18.6 / 18.7 |
+  | | 8192 | 156.7 / **207.3** / 174.2 | **18.9** / 15.6 / 17.8 |
+  | | 16384 | 81.3 / 99.0 / **109.1** | 14.0 / 12.3 / **14.9** |
+
+  Without flash attention the KQ and KQV products run as ordinary matmuls, which this GPU (no matrix cores) does
+  better than the generic flash attention shader for head size 256 and 512. gpt-oss (head size 64, sliding window
+  of 128 in half the layers, sinks) is the exception. An older note here recommended flash attention with a q8_0
+  cache for Meteor Lake long prompts; that compared it with flash attention on an f16 cache, not with `-fa 0`.
+  Costs of `-fa 0`: the KQ matrix is kept in the compute buffer (16 heads x ubatch x context x 4 bytes, about
+  0.55 GB at `-ub 512` and 16k, 2.2 GB at `-ub 2048`), and the V cache cannot be quantized.
 - KV cache: q8_0 costs little speed now. Lunar Lake, Qwen3.6 at 16k context: prefill f16 472 / q8_0 445 t/s,
   token generation f16 29.0 / q8_0 27.2 t/s (before: 167 and 23.2). Meteor Lake (no Intel flash attention kernels
-  there): with flash attention, q8_0 is now faster than f16 at long context (see above). f16 is still slightly faster on Lunar Lake; with few
+  there): see above, `-fa 0` with an f16 cache is usually the faster choice. f16 is still slightly faster on Lunar Lake; with few
   attention layers (Qwen3.6: 10 of 40) the f16 cache is small, e.g. about 670 MB at 32k context.
 
 ## Correctness
