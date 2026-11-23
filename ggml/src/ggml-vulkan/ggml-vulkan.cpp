@@ -1220,6 +1220,16 @@ void ggml_vk_wait_events(vk_context& ctx, std::vector<vk::Event>&& events) {
 
 static bool ggml_vk_fa_scalar_uses_mmq(const vk_device& device, ggml_type k_type, ggml_type v_type);
 
+// Xe-LPG iGPU, token generation with head size 512 (512 threads, see above): half the default split_k.
+// Gemma-4 global layers, KV 16384: f16 7.2 -> 4.7 ms, q8_0 5.5 -> 3.9 ms (split_k 16 -> 8).
+static uint32_t ggml_vk_xe1_fa_split_k(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t split_k) {
+    if (params.path == FA_SCALAR && device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 &&
+        device->uma && hsk == 512 && hsv == 512 && n_rows <= 8 && params.workgroup_size == 512 && split_k > 1) {
+        return split_k / 2;
+    }
+    return split_k;
+}
+
 static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
 
     vk_fa_tuning_params result{};
@@ -1281,14 +1291,16 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         result.shmem_staging = 0;
     }
 
+    const bool xe1_igpu = device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 && device->uma;
+
     // Xe-LPG iGPU (Meteor Lake), token generation (incl. GQA rows): 256 threads per workgroup instead of 128.
     // Qwen3.6-35B-A3B q8_0 cache, FA at KV 16384: 1.31 -> 0.84 ms; tg64 at depth 16384: 15.2 -> 16.6 t/s.
     // Qwen3-Coder-30B-A3B tg64 at depth 4096: 14.8 -> 20.0 t/s. GGML_VK_XE1_FA_DECODE_WG128=1 keeps 128.
-    if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 && device->uma &&
-        n_rows <= 8 && result.workgroup_size == 128) {
+    // Head size 512 (Gemma-4 global layers) takes 512 threads, see ggml_vk_xe1_fa_split_k for its split_k.
+    if (xe1_igpu && n_rows <= 8 && result.workgroup_size == 128) {
         static const bool keep_default = getenv("GGML_VK_XE1_FA_DECODE_WG128") != nullptr;
         vk_fa_tuning_params t = result;
-        t.workgroup_size = 256;
+        t.workgroup_size = (hsk == 512 && hsv == 512) ? 512 : 256;
         const uint32_t cols_per_iter = t.workgroup_size / t.d_split / t.row_split;
         if (!keep_default && t.block_cols % cols_per_iter == 0 &&
             (t.disable_subgroups || t.workgroup_size % t.subgroup_size == 0) &&
@@ -1301,14 +1313,38 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
     // (e.g. a q8_0 KV cache): 16 rows and 256 threads per workgroup. Qwen3.6-35B-A3B pp512 at depth 16384:
     // 54 -> 69 t/s, at depth 4096: 107 -> 120 t/s. The f16 shader gets slower with this shape, so it keeps the default.
     // GGML_VK_XE1_FA_DEFAULT_TILE=1 keeps the default shape for comparison.
-    if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 && device->uma &&
-        n_rows > 8 && hsk == 256 && hsv == 256 && result.row_split == 4 &&
+    if (xe1_igpu && n_rows > 8 && hsk == 256 && hsv == 256 && result.row_split == 4 &&
         ggml_vk_fa_scalar_uses_mmq(device, k_type, v_type)) {
         static const bool keep_default = getenv("GGML_VK_XE1_FA_DEFAULT_TILE") != nullptr;
         vk_fa_tuning_params t = result;
         t.block_rows = 16;
         t.workgroup_size = 256;
         if (!keep_default && ggml_vk_flash_attn_scalar_shmem_support(device, t, hsk, hsv, f32acc, k_type, v_type)) {
+            result = t;
+        }
+    }
+
+    // Xe-LPG iGPU, prefill (above 32 rows, so the GQA limit taken from the 32-row tuning stays at 8):
+    // - head size 256 with the f16 shader: 4 rows and d_split 4. 512 rows at KV 8192: 195 -> 121 ms.
+    // - head size 512: 256 threads, and 4 rows for the f16 shader. 512 rows at KV 8192: f16 517 -> 335 ms,
+    //   q8_0 cache (integer dot shader, 8 rows) 1134 -> 509 ms.
+    // GGML_VK_XE1_FA_DEFAULT_TILE=1 keeps the default shapes.
+    if (xe1_igpu && n_rows > 32 && hsk == hsv && (hsk == 256 || hsk == 512) && result.row_split == 4) {
+        static const bool keep_default = getenv("GGML_VK_XE1_FA_DEFAULT_TILE") != nullptr;
+        const bool mmq = ggml_vk_fa_scalar_uses_mmq(device, k_type, v_type);
+        vk_fa_tuning_params t = result;
+        if (hsk == 256 && !mmq) {
+            t.block_rows = 4;
+            t.d_split = 4;
+        } else if (hsk == 512) {
+            t.workgroup_size = 256;
+            if (!mmq) {
+                t.block_rows = 4;
+            }
+        }
+        const uint32_t cols_per_iter = t.workgroup_size / t.d_split / t.row_split;
+        if (!keep_default && t.row_split <= t.block_rows && t.block_cols % cols_per_iter == 0 &&
+            ggml_vk_flash_attn_scalar_shmem_support(device, t, hsk, hsv, f32acc, k_type, v_type)) {
             result = t;
         }
     }
@@ -10016,6 +10052,10 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         if (total_wgs_no_split < shader_core_count * 2) {
             split_k = shader_core_count * 2 / total_wgs_no_split;
         }
+    }
+
+    if (!use_sparse) {
+        split_k = ggml_vk_xe1_fa_split_k(ctx->device, tuning_params, HSK, HSV, N, split_k);
     }
 
     if (!use_sparse && split_k > 1) {
