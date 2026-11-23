@@ -389,6 +389,12 @@ All mat-vecs together, per token, from the profile run (before the "new" rows ab
   53 without the grid load, 49 when the grid address does not depend on loaded data, and 44 with no decode at all.
   So the chain of dependent loads costs more than the instruction count, and even without decode this shape
   stays at about 60 GB/s. Fewer rows per workgroup helped more than any of these (50 us at 4 rows); lane split did not help.
+- Meteor Lake, small IQ MoE experts (Qwen3.6 IQ2_XXS / IQ2_S gate/up 512x2048, IQ2_S / IQ3_S down 2048x512):
+  rows per workgroup 8 (default) / 4 / 2 / 1, the large workgroup and subgroup 16 / 32 with 4 rows were tried
+  (`mtl-smallexp.ps1`, 5 alternating rounds). Per-call times moved by up to 5-15% (IQ2_XXS 6.0 -> 5.0 ms per token
+  with the large workgroup, IQ2_S slower there), but tg128 stayed within noise on Qwen3.6 UD-IQ2_XXS (medians
+  23.4-24.0, default 23.6) and the default was best on UD-IQ3_S (20.59 vs 19.70-20.52). Subgroup 32 was slower on
+  both. The default stays.
 - Lane split helps IQ3_S but makes IQ4_NL slower (k=704 down: 202 -> 245 us at 4 lanes, 349 us at 2),
   probably because neighbouring lanes then read different rows.
 - `MUL_MAT_ADD` timings in the perf logger sometimes jump 2-3x without any change in wall time; treat that line with care.
