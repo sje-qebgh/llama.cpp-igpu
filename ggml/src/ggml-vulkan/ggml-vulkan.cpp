@@ -2062,13 +2062,16 @@ static uint32_t ggml_vk_xe2_mmvq_rows(ggml_type t, bool id) {
     }
 }
 
-// Xe-LPG (Meteor Lake, Windows driver): MMVQ with the large workgroup for MXFP4 MoE and dense Q8_0.
+// Xe-LPG (Meteor Lake, Windows driver): MMVQ with the large workgroup for MXFP4 MoE, dense Q8_0 and dense Q6_K.
 // MXFP4 MoE, gpt-oss-20b tg128 t/s: fp16 path 20.82, large 22.27, large + 1 row 20.42, large + subgroup 16 17.85,
 // large + subgroup 32 18.93; the single-subgroup shapes were about 20% slower than fp16.
 // Q8_0 dense, Gemma4 26B-A4B: projections 15-20% faster per call, tg128 14.92 -> 16.02 (last 5 of 7 rounds),
 // 1 row no gain; gpt-oss-20b 22.06 -> 22.12 (its Q8_0 is mostly the output layer, 3% faster per call).
+// Q6_K dense, 4 rows (see mmvq_rows), tg128 medians of 5 alternating rounds: Qwen3.6-35B-A3B UD-IQ3_S 19.97 -> 20.94,
+// UD-IQ2_XXS 23.77 -> 24.76, Qwen3-Coder-30B-A3B UD-Q2_K_XL 31.64 -> 32.52. Default rows 19.6 / 24.9 / 31.8,
+// one subgroup 20.5 / 24.8 / 32.2. Q4_K / Q5_K were slower with the large workgroup (Q5_K 13.7 -> 16.0 ms per token).
 static bool ggml_vk_xe1_mmvq_large_wg(const vk_device & device, ggml_type t, bool id) {
-    const bool type_ok = id ? t == GGML_TYPE_MXFP4 : t == GGML_TYPE_Q8_0;
+    const bool type_ok = id ? t == GGML_TYPE_MXFP4 : (t == GGML_TYPE_Q8_0 || t == GGML_TYPE_Q6_K);
     return type_ok && !device->mmvq_xe1_legacy &&
            device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE1 &&
            device->uma && device->driver_id == vk::DriverId::eIntelProprietaryWindows;
@@ -3625,6 +3628,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     auto const &mmvq_rows    = [&](ggml_type t, uint32_t rows) {
         if (device->mmvq_rows_ovr[t]) return (uint32_t) device->mmvq_rows_ovr[t];
         const uint32_t xe2 = device->mmvq_xe2_tuned ? ggml_vk_xe2_mmvq_rows(t, false) : 0;
+        if (!xe2 && t == GGML_TYPE_Q6_K && ggml_vk_xe1_mmvq_large_wg(device, t, false)) {
+            return 4u;
+        }
         return xe2 ? xe2 : rows;
     };
     auto const &mmvq_id_rows = [&](ggml_type t, uint32_t rows) {
@@ -8029,7 +8035,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             // MXFP4 MoE: with the large workgroup (see ggml_vk_xe1_mmvq_large_wg) gpt-oss-20b
             // tg128 20.82 -> 22.27 t/s (5 rounds, driver 32.0.101.9028); other shapes were slower.
             // IQ3_S at k=2816 (Gemma4 26B-A4B gate_up) and IQ4_NL MoE: no shape beat fp16 in tg128.
-            // Q8_0 dense: faster with the large workgroup; Q8_0 MoE stays on fp16 (not measured).
+            // Q8_0 / Q6_K dense: faster with the large workgroup; their MoE stays on fp16 (not measured).
             // IQ2_XXS: Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 -> 19.70 t/s with GGML_VK_FORCE_MMVQ=1 (4 rounds).
             // IQ2_XS / IQ3_XXS are not measured here yet.
             // GGML_VK_XE1_MMVQ_LEGACY=1 restores the previous behavior (fp16 for every type).
@@ -8047,6 +8053,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             case GGML_TYPE_MXFP4:
                 return id;
             case GGML_TYPE_Q8_0:
+            case GGML_TYPE_Q6_K:
                 return !id;
             default:
                 return false;

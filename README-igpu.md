@@ -26,7 +26,7 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Token generation, Xe2 + Windows driver | MMVQ for every type that has it (upstream: Q2_K/Q3_K/Q6_K only), tuned rows per workgroup (Q6_K: 4) | measured on Lunar Lake |
 | Token generation, IQ2_S / IQ3_S | MMVQ reads the grid tables from a small storage buffer instead of copying them into shared memory in every workgroup (token generation launches many small workgroups); `GGML_VK_MMVQ_IQ_SHMEM=1` selects the shared memory copy, kept bit-packed (IQ2_S 8 KiB -> 2 KiB, IQ3_S 2 KiB -> 1 KiB) | measured on Lunar Lake |
 | Token generation, Qwen3.5/3.6 and other delta-net models | when a ubatch reads its single recurrent state from the cell it writes back to (one sequence), use a view of that cell instead of gathering a copy with `GET_ROWS` (graph change, all backends) | measured on Lunar Lake |
-| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_XXS, IQ2_S, IQ4_XS, IQ3_S for k < 2048, MXFP4 MoE and dense Q8_0 with the large workgroup; fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
+| Token generation, Xe-LPG iGPU + Windows driver | MMVQ per type: Q2_K, Q3_K, Q4_K, Q5_K, IQ2_XXS, IQ2_S, IQ4_XS, IQ3_S for k < 2048, MXFP4 MoE, dense Q8_0 and dense Q6_K (4 rows) with the large workgroup; fp16 for the rest (upstream: fp16 for every type) | measured on Meteor Lake |
 | Token generation, MMVQ | optional lane split: several rows per subgroup, a few lanes per row (`GGML_VK_MMVQ_LANES`); on by default only for IQ3_S MoE on Xe2 (8 lanes per row) | measured on Lunar Lake |
 
 Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S, IQ4_XS and MXFP4.
@@ -275,6 +275,22 @@ Check on the committed build (9db50c9, no patch; `test-backend-ops` MUL_MAT 2604
 5 alternating rounds: Gemma-4 15.71 (15.26-15.94) vs 14.81 (14.38-15.02) with `GGML_VK_XE1_MMVQ_LEGACY=1` (1.06x,
 faster in every round; for this model LEGACY changes only the Q8_0 mat-vecs).
 
+Dense Q6_K (Qwen3.6 UD-IQ3_S: 56% of the token time; UD-IQ2_XXS 13%, Qwen3-Coder 15%) also takes MMVQ with the
+large workgroup now, with 4 rows. Dense Q4_K / Q5_K keep MMVQ with one subgroup: the large workgroup made them
+slower (Qwen3.6 UD-IQ2_XXS Q5_K 13.7 -> 16.0 ms per token, tg128 -4%). `mtl-kquant.ps1`, build cde13ae with a test
+patch, tg128 of 5 alternating rounds, mean (median):
+
+| dense Q6_K mat-vec | Qwen3.6 UD-IQ3_S | Qwen3.6 UD-IQ2_XXS | Qwen3-Coder UD-Q2_K_XL |
+|---|---|---|---|
+| fp16 path (old default) | 19.85 (19.97) | 23.03 (23.77) | 31.60 (31.64) |
+| MMVQ, one subgroup | 20.46 (20.48) | 24.34 (24.79) | 32.20 (32.23) |
+| MMVQ, large workgroup, default rows | 19.55 (19.64) | 24.87 (24.89) | 31.84 (31.81) |
+| MMVQ, large workgroup, 4 rows (new default) | 20.78 (20.94) | 24.83 (24.76) | 32.42 (32.52) |
+
+The 4-row setting was best or tied on all three (+5%, +4%, +3% by median; the fp16 rounds of the IQ2_XXS model
+include one at 19.2). Here the perf logger again disagreed with tg: it showed Q6_K slower with MMVQ on UD-IQ3_S
+(29.1 -> 31.4 ms per token) while tg went up.
+
 Gemma-4 IQ3_S gate_up (k=2816) and IQ4_NL down (k=704) were tried with the default shape, the large workgroup, lane
 splits and subgroup 8/16/32; none beat fp16 in tg128 (Gemma-4 fp16 15.09, MMVQ 14.70-14.95), so they stay on fp16. Per-op times from the perf logger did not predict tg here (it runs one
 op at a time): some shapes were faster per call and 20% slower in tg.
@@ -411,7 +427,7 @@ All mat-vecs together, per token, from the profile run (before the "new" rows ab
 - `GGML_VK_MMVQ_SG`: subgroup size for the MMVQ pipelines (Intel), e.g. `16`
 - `GGML_VK_MMVQ_DEBUG=1`: log once per shape whether a mat-vec took the MMVQ path and why
 - `GGML_VK_XE1_MMVQ_LEGACY=1`: upstream MMVQ selection on Xe-LPG iGPUs with the Windows driver (fp16 for every type,
-  also no large workgroup for MXFP4 MoE and dense Q8_0)
+  also no large workgroup for MXFP4 MoE and dense Q8_0 / Q6_K)
 
 ### Knobs for experiments (Vulkan, MMQ / prefill, GPUs without matrix cores)
 
