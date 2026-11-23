@@ -107,8 +107,11 @@ Core Ultra 5 135H, driver 32.0.101.8991, upstream 9fba51d vs this fork b9f1952, 
 
 All `test-backend-ops` checks pass on this GPU (new IQ MMQ types, `GATED_DELTA_NET`, MMVQ forced on).
 
-MoE prefill, skipping the unused columns of a tile (later session; the machine was slower than above, so compare
-within the table only). `-fa 0 -r 1`, 2 alternating runs (mean):
+MoE prefill, skipping the unused columns of a tile. The slow MoE prefill came from mostly empty MoE tiles, not from
+the quant decode: dense Q4_K mat-mul ran at 2000-2600 GFLOPS, the MoE ones at 100-290; SIMD8 and other MoE tiles did
+not help. The float / coopmat shader (`mul_mm.comp`) already skipped these columns upstream, the integer dot one
+(`mul_mmq.comp`) did not. Later session; the machine was slower than above, so compare within the table only.
+`-fa 0 -r 1`, 2 alternating runs (mean):
 
 | Model | pp512 before / after | pp2048 before / after |
 |---|---|---|
@@ -465,10 +468,6 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   (IQ2_S gate/up 50 us per call at 4 rows, about 44 us with no decode at all).
 - Meteor Lake: IQ2_XS / IQ3_XXS MMVQ not measured (off by default there, `GGML_VK_FORCE_MMVQ=1`). IQ2_XXS is on:
   Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 (fp16 for IQ2_XXS) vs 19.70 t/s (MMVQ forced), 4 alternating rounds, f32e39e.
-- MoE prefill on Meteor Lake: the slow Qwen3-Coder UD-Q2_K_XL prefill (33-37 t/s at pp512) came from mostly empty
-  MoE tiles, not from the K-quant decode: dense Q4_K mat-mul ran at 2000-2600 GFLOPS while the MoE ones ran at 100-290.
-  SIMD8 and other MoE tiles did not help. Column skipping (above) fixes most of it; the float / coopmat shader
-  (`mul_mm.comp`) already did this upstream, only the integer dot one (`mul_mmq.comp`) did not.
 
 ### Not planned
 
