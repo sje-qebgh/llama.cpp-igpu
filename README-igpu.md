@@ -66,20 +66,21 @@ re-measured.
 
 ### Lunar Lake: upstream vs this fork
 
-`bench-compare.ps1`, 2026-11-22: Core Ultra 7 268V (Arc 140V), driver 32.0.101.9028, Windows power mode best
-performance, on AC. Upstream 8d60873 vs this fork 63cce34, `llama-bench` defaults, 3 alternating rounds (2 at depth
-16384), median t/s:
+`bench-compare.ps1`, 2026-11-24: Core Ultra 7 268V (Arc 140V), driver 32.0.101.9028, Windows power mode best
+performance, on AC. Upstream 212c547 vs this fork 1f9f04f (rebased onto 212c547), `llama-bench` defaults,
+3 alternating rounds (2 at depth 16384), median t/s:
 
 | model | pp512 upstream | pp512 fork | tg128 upstream | tg128 fork |
 |---|---|---|---|---|
-| Qwen3.6-35B-A3B UD-IQ2_XXS | 650.3 | 653.0 (1.00x) | 25.7 | 36.5 (1.42x) |
-| Qwen3.6-35B-A3B UD-IQ3_S | 621.1 | 630.3 (1.01x) | 23.4 | 32.5 (1.39x) |
-| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 854.9 | 855.8 (1.00x) | 41.8 | 46.7 (1.12x) |
-| Gemma-4 26B-A4B UD-IQ4_NL | 822.2 | 824.7 (1.00x) | 21.7 | 24.4 (1.12x) |
-| gpt-oss-20b UD-Q4_K_XL | 982.3 | 975.9 (0.99x) | 31.4 | 32.9 (1.05x) |
-| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 164.2 | 446.1 (2.72x) | 18.3 | 28.4 (1.55x) |
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 642.6 | 643.9 (1.00x) | 25.5 | 36.6 (1.43x) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 630.2 | 639.3 (1.01x) | 23.9 | 32.7 (1.37x) |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 860.7 | 863.3 (1.00x) | 41.4 | 45.9 (1.11x) |
+| Gemma-4 26B-A4B UD-IQ4_NL | 820.0 | 817.3 (1.00x) | 21.1 | 24.1 (1.14x) |
+| gpt-oss-20b UD-Q4_K_XL | 985.0 | 987.5 (1.00x) | 31.4 | 33.1 (1.05x) |
+| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 151.3 | 427.4 (2.82x) | 18.4 | 26.8 (1.46x) |
 
-Gemma-4 tg went from 1.08x (2026-11-21, fork 02d5e70) to 1.12x with the IQ4_NL MoE down launch shape (8 lanes x 4 rows).
+The fork numbers match the previous run (2026-11-22, fork 63cce34 on upstream 8d60873) within noise; the rebase
+changed nothing on Lunar Lake. The depth 16384 rounds varied the most (fork tg 25.6 / 28.1, pp 394 / 461).
 
 On Lunar Lake prefill at short context runs on the same FP16 XMX matmuls as upstream; the fork's gains are token
 generation and long context with a quantized KV cache. Note: the older Lunar Lake tables below that name

@@ -112,8 +112,8 @@ save(fig, "igpu-meteor-lake.png",
      "Run-to-run noise is 5-10%. Details: README-igpu.md")
 
 # ---------------- Lunar Lake ----------------
-# bench-compare.ps1, 2026-11-22: Core Ultra 7 268V, driver 32.0.101.9028,
-# upstream 8d60873 vs fork 63cce34, 3 alternating rounds at depth 0 (2 at depth 16384), medians.
+# bench-compare.ps1, 2026-11-24: Core Ultra 7 268V, driver 32.0.101.9028,
+# upstream 212c547 vs fork 1f9f04f, 3 alternating rounds at depth 0 (2 at depth 16384), medians.
 LNL_MODELS = ["Qwen3.6-35B-A3B UD-IQ2_XXS", "Qwen3.6-35B-A3B UD-IQ3_S", "Qwen3-Coder-30B-A3B UD-Q2_K_XL",
               "Gemma-4 26B-A4B UD-IQ4_NL", "gpt-oss-20b UD-Q4_K_XL"]
 fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
@@ -121,18 +121,18 @@ fig, axs = plt.subplots(3, 1, figsize=(8.2, 11.2), facecolor=SURFACE,
 panel(axs[0], "Prefill",
       "pp512, llama-bench defaults · 3 alternating rounds, median",
       LNL_MODELS,
-      [("upstream 8d60873", BASE, [650.3, 621.1, 854.9, 822.2, 982.3]),
-       ("this fork 63cce34", FORK, [653.0, 630.3, 855.8, 824.7, 975.9])])
+      [("upstream 212c547", BASE, [642.6, 630.2, 860.7, 820.0, 985.0]),
+       ("this fork 1f9f04f", FORK, [643.9, 639.3, 863.3, 817.3, 987.5])])
 panel(axs[1], "Token generation",
       "tg128, llama-bench defaults · 3 alternating rounds, median",
       LNL_MODELS,
-      [("upstream 8d60873", BASE, [25.7, 23.4, 41.8, 21.7, 31.4]),
-       ("this fork 63cce34", FORK, [36.5, 32.5, 46.7, 24.4, 32.9])])
+      [("upstream 212c547", BASE, [25.5, 23.9, 41.4, 21.1, 31.4]),
+       ("this fork 1f9f04f", FORK, [36.6, 32.7, 45.9, 24.1, 33.1])])
 panel(axs[2], "Long context: 16k tokens in the KV cache",
       "Qwen3.6-35B-A3B UD-IQ3_S, -d 16384 -fa 1 -ctk q8_0 -ctv q8_0 · 2 alternating rounds",
       ["pp512", "tg128"],
-      [("upstream 8d60873", BASE, [164.2, 18.3]),
-       ("this fork 63cce34", FORK, [446.1, 28.4])])
+      [("upstream 212c547", BASE, [151.3, 18.4]),
+       ("this fork 1f9f04f", FORK, [427.4, 26.8])])
 fig.suptitle("Lunar Lake (Core Ultra 7 268V, Arc 140V) · llama.cpp-igpu", x=0.01, ha="left",
              fontsize=14, fontweight="bold", y=0.985)
 fig.subplots_adjust(left=0.34, right=0.97, top=0.885, bottom=0.075)
