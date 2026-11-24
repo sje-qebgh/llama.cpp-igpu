@@ -331,8 +331,10 @@ The prefill shapes apply above 32 rows only: the GQA limit for one token is take
 than 8 rows there would turn GQA off for the 8 query heads per KV head. Not changed:
 - hs 256, one token: the current default (256 threads, split_k 16) was best or tied.
 - hs 64 (gpt-oss), one token: it runs without GQA on Meteor Lake (the 32-row tile has 4 rows, so 8 query heads do
-  not fit). Allowing GQA with 4 rows per block failed 2 tests; with 8 rows it was slower (f16 707 -> 929 us,
-  q8_0 1376 -> 1345). split_k, columns and threads did not help either.
+  not fit). With GQA a workgroup covers only its first block of rows (`i = 0` in `init_indices`), so the GQA ratio
+  must not exceed block_rows: with 4 rows the shader computed only 4 of the 8 heads (2 tests fail, and the time,
+  f16 573 us, is not comparable). With 8 rows it was slower (f16 707 -> 929 us, q8_0 1376 -> 1345). split_k,
+  columns and threads did not help either.
 - hs 64, prefill: the default was fastest.
 The q8_0 shader is a different shader (integer dot) and reacts differently: d split 4 made the hs 256 prefill 6x
 slower there, 4 rows 2-7x slower.
