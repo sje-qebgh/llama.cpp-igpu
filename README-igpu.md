@@ -39,6 +39,11 @@ Upstream already has integer dot MMQ for Q2_K..Q6_K, Q4_0/Q4_1/Q5_x/Q8_0, IQ3_S,
 
 The charts are drawn from the tables below by `docs/igpu/make_charts.py`; each chart compares numbers from one session.
 
+Measuring on the Meteor Lake laptop: run-to-run noise is 5-10%, and the machine state can move the absolute numbers by
+25-30%. Seen so far: the package power stuck near 40 W on AC until something switched the limit up, and thermal
+throttling (HWiNFO) with the room heated, gone with the heating off (about 20 C lower). Compare settings in
+alternating rounds within one session; treat absolute numbers from different sessions with care.
+
 ### Meteor Lake: upstream vs this fork
 
 `bench-compare.ps1`, 2026-11-22 (second run): Core Ultra 5 135H, driver 32.0.101.9028, Dell Optimizer "Ultra Performance",
