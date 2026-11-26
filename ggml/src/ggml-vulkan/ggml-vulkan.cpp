@@ -9806,14 +9806,38 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 32, KV, k_type_eff, v_type_eff, f32acc, qk_ratio);
     const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
 
-    if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
+    // Xe-LPG iGPU with a quantized K (integer dot shader): when the GQA ratio exceeds max_gqa (head size 64:
+    // 4 rows, 8 query heads per KV head), a workgroup takes the largest power of two of the query heads of one
+    // KV head that fits, instead of running without GQA. gpt-oss-20b tg32 at depth 16384, q8_0 cache:
+    // 13.05 -> 13.92 t/s; with f16 it was slower (12.53 -> 11.73), so f16 keeps GQA off.
+    // GGML_VK_XE1_FA_NO_GQA_FOLD=1 turns it off.
+    static const bool no_gqa_fold = getenv("GGML_VK_XE1_FA_NO_GQA_FOLD") != nullptr;
+    const bool gqa_fold = !no_gqa_fold && ggml_is_quantized(k_type_eff) && ctx->device->vendor_id == VK_VENDOR_ID_INTEL &&
+                          ctx->device->architecture == vk_device_architecture::INTEL_XE1 && ctx->device->uma;
+
+    if (N <= 8 && qk_ratio > 1 &&
         qk_ratio * nek2 == neq2 && nek2 == nev2 && nem2 <= 1) {
-        // grouped query attention - make the N dimension equal to gqa_ratio, reduce
-        // workgroups proportionally in y dimension. The shader will detect gqa_ratio > 1
-        // and change addressing calculations to index Q's dimension 2.
-        gqa_ratio = qk_ratio;
-        N = gqa_ratio;
-        workgroups_y /= gqa_ratio;
+        uint32_t fold = 0;
+        if (qk_ratio <= max_gqa) {
+            fold = qk_ratio;
+        } else if (gqa_fold) {
+            fold = 1;
+            while (fold * 2 <= max_gqa && qk_ratio % (fold * 2) == 0) {
+                fold *= 2;
+            }
+            if (fold < 2) {
+                fold = 0;
+            }
+        }
+        if (fold > 0) {
+            // grouped query attention - make the N dimension equal to gqa_ratio, reduce
+            // workgroups proportionally in y dimension. The shader will detect gqa_ratio > 1
+            // and change addressing calculations to index Q's dimension 2.
+            // With fold < qk_ratio, qk_ratio / fold workgroups share one KV head (ik2 = iq2 / (neq2 / nek2)).
+            gqa_ratio = fold;
+            N = gqa_ratio;
+            workgroups_y /= gqa_ratio;
+        }
     }
 
     tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc, qk_ratio);
