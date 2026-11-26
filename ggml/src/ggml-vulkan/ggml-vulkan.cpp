@@ -1297,12 +1297,19 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
     // Qwen3.6-35B-A3B q8_0 cache, FA at KV 16384: 1.31 -> 0.84 ms; tg64 at depth 16384: 15.2 -> 16.6 t/s.
     // Qwen3-Coder-30B-A3B tg64 at depth 4096: 14.8 -> 20.0 t/s. GGML_VK_XE1_FA_DECODE_WG128=1 keeps 128.
     // Head size 512 (Gemma-4 global layers) takes 512 threads, see ggml_vk_xe1_fa_split_k for its split_k.
+    // With 8 GQA rows it also takes row split 8 instead of 4: with 4 the shader spilled 5.8 KB of registers.
+    // Gemma-4 26B-A4B tg32 at depth 16384, f16 cache: 11.1 -> 13.1 t/s; q8_0 unchanged (11.9).
+    // GGML_VK_XE1_FA_DECODE_RS4=1 keeps row split 4.
     if (xe1_igpu && n_rows <= 8 && result.workgroup_size == 128) {
         static const bool keep_default = getenv("GGML_VK_XE1_FA_DECODE_WG128") != nullptr;
+        static const bool keep_rs4 = getenv("GGML_VK_XE1_FA_DECODE_RS4") != nullptr;
         vk_fa_tuning_params t = result;
         t.workgroup_size = (hsk == 512 && hsv == 512) ? 512 : 256;
+        if (!keep_rs4 && hsk == 512 && hsv == 512 && t.row_split == 4 && t.block_rows >= 8 && t.disable_subgroups) {
+            t.row_split = 8;
+        }
         const uint32_t cols_per_iter = t.workgroup_size / t.d_split / t.row_split;
-        if (!keep_default && t.block_cols % cols_per_iter == 0 &&
+        if (!keep_default && t.row_split <= t.block_rows && cols_per_iter > 0 && t.block_cols % cols_per_iter == 0 &&
             (t.disable_subgroups || t.workgroup_size % t.subgroup_size == 0) &&
             ggml_vk_flash_attn_scalar_shmem_support(device, t, hsk, hsv, f32acc, k_type, v_type)) {
             result = t;
