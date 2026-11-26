@@ -17,7 +17,8 @@ Everything here is in the Vulkan backend. Other backends are untouched.
 | Prefill with a quantized KV cache (e.g. `-ctk q8_0 -ctv q8_0`), Xe2 | upstream converts the cache to f16 before flash attention, but then still checked the original type for the Intel flash attention kernels (`xe_fa`) and fell back to the generic scalar shader, 10x slower. The converted cache now uses the Intel kernels. `GGML_VK_XE_FA_NO_DEQUANT=1` restores the old behavior | measured on Lunar Lake |
 | Token generation with a q8_0 KV cache, Xe2 | the Intel flash attention decode kernels read q8_0 K/V directly (dequantized on load) instead of falling back to the generic shader. `GGML_VK_XE_FA_NO_Q8_DECODE=1` restores the old behavior | measured on Lunar Lake |
 | Prefill with flash attention, Xe-LPG iGPU | the generic flash attention shader uses other tiles per head size and shader: head size 256, integer dot version (quantized K, e.g. `-ctk q8_0`): 16 query rows and 256 threads instead of 8 and 128; head size 256, f16: 4 rows and d split 4; head size 512 (Gemma-4 global layers): 256 threads, and 4 rows for f16. `GGML_VK_XE1_FA_DEFAULT_TILE=1` restores the old shapes | measured on Meteor Lake |
-| Token generation with flash attention, Xe-LPG iGPU | the generic flash attention shader uses 256 threads per workgroup instead of 128 when it runs one token (also with GQA rows); head size 512 uses 512 threads and half the KV splits. `GGML_VK_XE1_FA_DECODE_WG128=1` restores 128 | measured on Meteor Lake |
+| Token generation with flash attention, Xe-LPG iGPU | the generic flash attention shader uses 256 threads per workgroup instead of 128 when it runs one token (also with GQA rows); head size 512 uses 512 threads and half the KV splits, and with 8 GQA rows row split 8 instead of 4 (row split 4 spilled registers). `GGML_VK_XE1_FA_DECODE_WG128=1` restores 128, `GGML_VK_XE1_FA_DECODE_RS4=1` row split 4 | measured on Meteor Lake |
+| Token generation with flash attention and a quantized K cache, Xe-LPG iGPU | head size 64 (gpt-oss: 8 query heads per KV head, tile of 4 rows) ran without GQA; a workgroup now takes 4 query heads of one KV head (GQA fold). f16 keeps GQA off (slower). `GGML_VK_XE1_FA_NO_GQA_FOLD=1` turns it off | measured on Meteor Lake |
 | Prefill, IQ1_S / IQ1_M | integer dot MMQ shaders (`8 * (grid + delta)` is an exact int8); UD-IQ2_XXS quants also contain many IQ1_S tensors | tests pass on Meteor Lake |
 | Qwen3.5/3.6 (Gated DeltaNet) | `gated_delta_net` variant that shares each token's k/q between 16 subgroups via shared memory (Intel only) | measured |
 | Qwen3.5/3.6 prefill, Xe2 | that variant loads k/q/g/beta of 8 tokens per shared memory block, so the workgroup waits once per 8 tokens instead of every token; calls with more than 1024 tokens keep 1 token per block (slower with 8). `GGML_VK_GDN_TB=N` sets the block size | measured on Lunar Lake |
@@ -335,7 +336,7 @@ far behind Lunar Lake: per call 5.3 ms (Lunar 1.25) and 2.2 ms (0.53) for one to
 The prefill shapes apply above 32 rows only: the GQA limit for one token is taken from the 32-row tile, and fewer
 than 8 rows there would turn GQA off for the 8 query heads per KV head. Not changed:
 - hs 256, one token: the current default (256 threads, split_k 16) was best or tied.
-- hs 64 (gpt-oss), one token: it runs without GQA on Meteor Lake (the 32-row tile has 4 rows, so 8 query heads do
+- hs 64 (gpt-oss), one token (now changed for a quantized K, see the next section): it runs without GQA on Meteor Lake (the 32-row tile has 4 rows, so 8 query heads do
   not fit). With GQA a workgroup covers only its first block of rows (`i = 0` in `init_indices`), so the GQA ratio
   must not exceed block_rows: with 4 rows the shader computed only 4 of the 8 heads (2 tests fail, and the time,
   f16 573 us, is not comparable). With 8 rows it was slower (f16 707 -> 929 us, q8_0 1376 -> 1345). split_k,
@@ -357,6 +358,33 @@ tiles back, including the older q8_0 head size 256 one; the head size 512 token 
 
 `-fa 0` f16 at the same depth: Gemma-4 147.8 / 13.64, Qwen3.6 162.9 / 18.64. At depth 8192 the prefill without flash
 attention is still faster on this GPU, and Gemma-4 token generation too.
+
+### Flash attention token generation: row split and GQA fold (Meteor Lake)
+
+`GGML_VK_PIPELINE_STATS` works with the Windows driver (VK_KHR_pipeline_executable_properties); it reports no SIMD
+width or registers, but "Scratch Memory Size" shows register spills. Spilling shaders at the Gemma-4 / Qwen3.6 shapes:
+head size 512 with 8 GQA rows for one token, 5.3 KB (f16) / 5.8 KB (q8_0) with row split 4; the q8_0 (integer dot)
+prefill tiles, 4.4 KB (head size 256, 16 rows) and 3.4 KB (512, 8 rows). Lunar Lake runs the Intel kernels (`xe_fa`)
+there, none of them spills.
+
+Build 1f9f04f with a test patch (`igpu-probe-1126.ps1`, `igpu-probe-1127.ps1`), depth 16384, median of 3 (2 for the
+last two tables) alternating rounds, t/s:
+
+| tg32 at d16384 | old | new | |
+|---|---|---|---|
+| Gemma-4 26B-A4B UD-IQ4_NL, `-fa 1` f16, head size 512 row split 4 -> 8 | 11.11 | 13.14 | +18% |
+| same, q8_0 | 11.88 | 11.82 | no spill now, same speed |
+| gpt-oss-20b UD-Q4_K_XL, `-fa 1` q8_0, GQA fold of 4 | 13.05 | 13.92 | +7% |
+| same, f16 (not used) | 12.53 | 11.73 | -6% |
+
+Tried, not changed:
+- Fewer rows for the q8_0 prefill tiles (no spills then): pp512 at d16384 Qwen3.6 99.6 -> 73.2 (8 rows) / 51.4 (4 rows),
+  Gemma-4 61.2 -> 40.4 / 37.7. The spills cost less than the smaller tiles.
+- The Xe core count (unknown to the backend on both iGPUs, which changes split_k guesses): 7 on Meteor Lake was 0-3%
+  slower at depth 0 and 5% slower for tg at d16384; 8 on Lunar Lake within 1% everywhere.
+
+Gemma-4 at d16384 with the new row split, pp512 / tg32: `-fa 0` f16 113.0 / 12.09, `-fa 1` f16 77.0 / 12.58,
+`-fa 1` q8_0 65.5 / 11.72. Token generation is now on par with `-fa 0`, prefill is not, so `-fa 0` stays the advice.
 
 ### Long context prefill on Meteor Lake (flash attention)
 
@@ -485,6 +513,8 @@ All mat-vecs together, per token, from the profile run (before the "new" rows ab
 - `GGML_VK_XE_FA_NO_Q8_DECODE=1`: token generation with a q8_0 KV cache does not use the Intel flash attention decode kernels (old behavior)
 - `GGML_VK_XE1_FA_DECODE_WG128=1`: Xe-LPG, token generation keeps 128 threads per workgroup in the generic flash attention shader (old behavior)
 - `GGML_VK_XE1_FA_DEFAULT_TILE=1`: Xe-LPG, the generic flash attention shader keeps the default prefill tiles (head size 256 and 512, old behavior)
+- `GGML_VK_XE1_FA_DECODE_RS4=1`: Xe-LPG, token generation with head size 512 keeps row split 4 (old behavior)
+- `GGML_VK_XE1_FA_NO_GQA_FOLD=1`: Xe-LPG, a quantized K cache with more GQA heads than tile rows runs without GQA (old behavior)
 - `GGML_VK_XE_FA_NO_DEQUANT=1`: a quantized KV cache converted to f16 for prefill does not use the Intel flash attention kernels (old behavior)
 - `GGML_VK_GDN_TB=N`: Gated DeltaNet (Intel variant) tokens per shared memory block for calls of up to 1024 tokens (Xe2 default 8, others 1)
 - `GGML_VK_MMVQ_IQ_SHMEM=1`: IQ2/IQ3 MMVQ copy the (bit-packed) grid table into shared memory per workgroup instead of reading it from a storage buffer
@@ -551,6 +581,9 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 - IQ2_S / IQ3_S expert mat-vecs: issue the next grid index load before the current grid lookup, to break the chain
   of dependent loads (the largest part of the decode cost in the probe above). Upper bound about 1.5% of tg on Lunar Lake
   (IQ2_S gate/up 50 us per call at 4 rows, about 44 us with no decode at all).
+- Token generation: about 5 ms per token are not GPU time on both iGPUs (Qwen3.6 UD-IQ3_S: Meteor Lake 48 ms per token,
+  43 ms of ops with `GGML_VK_PERF_LOGGER_CONCURRENT=1`; Lunar Lake 30 and 26 ms). Next: `MAX_NODES_PER_SUBMIT` and
+  the fixed cost of the small ops.
 - Meteor Lake: IQ2_XS / IQ3_XXS MMVQ not measured (off by default there, `GGML_VK_FORCE_MMVQ=1`). IQ2_XXS is on:
   Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 (fp16 for IQ2_XXS) vs 19.70 t/s (MMVQ forced), 4 alternating rounds, f32e39e.
 
