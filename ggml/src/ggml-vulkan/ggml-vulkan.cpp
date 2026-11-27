@@ -12235,7 +12235,8 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
             {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf, mirror_buf},
             pc, groups);
-    } else if (use_cm && !replay) {
+    } else if ((use_cm && !replay) || pipeline->parameter_count == 7) {
+        // the Intel gated_delta_net_skq pipelines (no replay) take the 7 bindings of the chunked ones
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
             {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
             pc, groups);
