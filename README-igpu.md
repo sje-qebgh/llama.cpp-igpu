@@ -72,21 +72,28 @@ re-measured.
 
 ### Lunar Lake: upstream vs this fork
 
-`bench-compare.ps1`, 2026-11-24: Core Ultra 7 268V (Arc 140V), driver 32.0.101.9028, Windows power mode best
-performance, on AC. Upstream 212c547 vs this fork 1f9f04f (rebased onto 212c547), `llama-bench` defaults,
-3 alternating rounds (2 at depth 16384), median t/s:
+`bench-compare.ps1`, 2026-11-28: Core Ultra 7 268V (Arc 140V), driver 32.0.101.9028, Windows power mode best
+performance, on AC. This fork bb9189c (rebased onto upstream 15fcfc7) vs upstream, `llama-bench` defaults,
+3 alternating rounds (2 at depth 16384), median t/s. Upstream was 4c73444 (7 commits after 15fcfc7) for all rows but
+Gemma-4, which was re-run against 15fcfc7 (see the note below the table):
 
 | model | pp512 upstream | pp512 fork | tg128 upstream | tg128 fork |
 |---|---|---|---|---|
-| Qwen3.6-35B-A3B UD-IQ2_XXS | 642.6 | 643.9 (1.00x) | 25.5 | 36.6 (1.43x) |
-| Qwen3.6-35B-A3B UD-IQ3_S | 630.2 | 639.3 (1.01x) | 23.9 | 32.7 (1.37x) |
-| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 860.7 | 863.3 (1.00x) | 41.4 | 45.9 (1.11x) |
-| Gemma-4 26B-A4B UD-IQ4_NL | 820.0 | 817.3 (1.00x) | 21.1 | 24.1 (1.14x) |
-| gpt-oss-20b UD-Q4_K_XL | 985.0 | 987.5 (1.00x) | 31.4 | 33.1 (1.05x) |
-| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 151.3 | 427.4 (2.82x) | 18.4 | 26.8 (1.46x) |
+| Qwen3.6-35B-A3B UD-IQ2_XXS | 578.3 | 641.1 (1.11x) | 27.0 | 36.0 (1.33x) |
+| Qwen3.6-35B-A3B UD-IQ3_S | 619.5 | 621.6 (1.00x) | 24.2 | 32.3 (1.34x) |
+| Qwen3-Coder-30B-A3B UD-Q2_K_XL | 858.5 | 855.9 (1.00x) | 41.9 | 46.9 (1.12x) |
+| Gemma-4 26B-A4B UD-IQ4_NL (upstream 15fcfc7) | 796.3 | 795.2 (1.00x) | 21.3 | 24.0 (1.13x) |
+| gpt-oss-20b UD-Q4_K_XL | 989.9 | 986.3 (1.00x) | 31.4 | 33.0 (1.05x) |
+| Qwen3.6 IQ3_S, depth 16384, `-fa 1 -ctk q8_0 -ctv q8_0` | 168.6 | 446.2 (2.65x) | 19.2 | 28.2 (1.47x) |
 
-The fork numbers match the previous run (2026-11-22, fork 63cce34 on upstream 8d60873) within noise; the rebase
-changed nothing on Lunar Lake. The depth 16384 rounds varied the most (fork tg 25.6 / 28.1, pp 394 / 461).
+The fork numbers match the run before the rebase (2026-11-24, fork 1f9f04f on upstream 212c547) within noise:
+tg128 32.7 / 36.6 / 45.9 / 24.1 / 33.1 then, 32.3 / 36.0 / 46.9 / 24.1 / 33.0 now. Upstream IQ2_XXS pp512 had one
+fast round (573-636), so its 1.11x is noise.
+
+Upstream 4c73444 sends Gemma-4's MoE down experts to the CPU on Vulkan: #28898 (quant scales for fp8 and nvfp4) loads
+Gemma-4's per-expert scale as the scale of `ffn_down_exps`, and Vulkan's `supports_op` rejects ops with a weight
+scale. Upstream Gemma-4 at 4c73444: pp512 216.4, tg128 17.5 (15fcfc7: 796.3 and 21.3). The other models have no
+weight scales. The next rebase brings this into the fork unless upstream fixes it first.
 
 On Lunar Lake prefill at short context runs on the same FP16 XMX matmuls as upstream; the fork's gains are token
 generation and long context with a quantized KV cache. Note: the older Lunar Lake tables below that name
@@ -612,6 +619,8 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 - Token generation: the small ops cost 2.5-4 us each (see "Token generation: host time and small ops"). Fusing the
   Gated DeltaNet gate ops (SCALE, SIGMOID, SOFTPLUS_MUL; about 150 calls per token in Qwen3.6) would save about
   0.5 ms per token (1-2%). Not started.
+- Before the next rebase: upstream 4c73444 (#28898) runs Gemma-4's MoE down experts on the CPU (weight scale,
+  see "Lunar Lake: upstream vs this fork"). Either upstream fixes it, or MUL_MAT_ID takes the per-expert scale here.
 - Meteor Lake: IQ2_XS / IQ3_XXS MMVQ not measured (off by default there, `GGML_VK_FORCE_MMVQ=1`). IQ2_XXS is on:
   Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 (fp16 for IQ2_XXS) vs 19.70 t/s (MMVQ forced), 4 alternating rounds, f32e39e.
 
