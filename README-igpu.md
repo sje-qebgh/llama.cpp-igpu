@@ -386,6 +386,34 @@ Tried, not changed:
 Gemma-4 at d16384 with the new row split, pp512 / tg32: `-fa 0` f16 113.0 / 12.09, `-fa 1` f16 77.0 / 12.58,
 `-fa 1` q8_0 65.5 / 11.72. Token generation is now on par with `-fa 0`, prefill is not, so `-fa 0` stays the advice.
 
+### Token generation: host time and small ops (Lunar Lake)
+
+Qwen3.6 UD-IQ3_S tg takes about 30 ms per token, the sum of the ops in `GGML_VK_PERF_LOGGER_CONCURRENT=1` about
+26 ms (Meteor Lake 48 and 43 ms). Host timings with a test patch, build 8bc3628, tg64, us per token:
+
+| model | nodes | submits | before graph_compute | to first submit | record | wait in synchronize | wall |
+|---|---|---|---|---|---|---|---|
+| Qwen3.6 UD-IQ3_S | 3637 | 16 | 80-200 | 120 | 1600-1700 | 29200-29800 | 31200-31500 |
+| Gemma-4 26B-A4B UD-IQ4_NL | 2646 | 12 | 100-120 | 110-140 | 1200 | 40900 | 42100-42300 |
+| gpt-oss-20b UD-Q4_K_XL | 1351 | 8 | 90 | 90-110 | 600 | 30000 | 30700 |
+
+The GPU waits for the host only about 0.2-0.3 ms per token; recording runs while the GPU works. The rest is in the
+GPU queue: Qwen3.6 runs about 1335 ops per token, 754 of them under 10 us (median 4 us, together about 3.5 ms;
+RMS_NORM_MUL, small mat-vec, MULTI_ADD, GLU, SCALE, RMS_NORM, SIGMOID_MUL and the Gated DeltaNet gate ops).
+
+tg128, median of 3 alternating rounds, ratio to the default:
+
+| | Qwen3.6 | Gemma-4 | gpt-oss |
+|---|---|---|---|
+| `GGML_VK_MAX_NODES_PER_SUBMIT=25` | 0.991x | 0.995x | 1.000x |
+| `GGML_VK_MAX_NODES_PER_SUBMIT=200` | 1.013x | 1.003x | 0.964x (one slow round) |
+| `GGML_VK_MAX_NODES_PER_SUBMIT=10000` (8 submits) | 1.013x | 1.000x | 1.001x |
+| `GGML_VK_DISABLE_GRAPH_OPTIMIZE=1` | 0.983x | 0.982x | 0.986x |
+| `GGML_VK_DISABLE_FUSION=1` | 0.957x | 0.961x | 0.952x |
+
+Submit batching stays as upstream: fewer submits save about 0.8 ms per token for Qwen3.6 in the host timings, but
+1% in t/s is within the noise. Fewer ops (fusion) is what helps.
+
 ### Long context prefill on Meteor Lake (flash attention)
 
 Qwen3.6-35B-A3B UD-IQ3_S, pp512 at depth (`-d`), default `-ub 512`, 2 alternating runs (mean), build c271846 with a
@@ -581,9 +609,9 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
 - IQ2_S / IQ3_S expert mat-vecs: issue the next grid index load before the current grid lookup, to break the chain
   of dependent loads (the largest part of the decode cost in the probe above). Upper bound about 1.5% of tg on Lunar Lake
   (IQ2_S gate/up 50 us per call at 4 rows, about 44 us with no decode at all).
-- Token generation: about 5 ms per token are not GPU time on both iGPUs (Qwen3.6 UD-IQ3_S: Meteor Lake 48 ms per token,
-  43 ms of ops with `GGML_VK_PERF_LOGGER_CONCURRENT=1`; Lunar Lake 30 and 26 ms). Next: `MAX_NODES_PER_SUBMIT` and
-  the fixed cost of the small ops.
+- Token generation: the small ops cost 2.5-4 us each (see "Token generation: host time and small ops"). Fusing the
+  Gated DeltaNet gate ops (SCALE, SIGMOID, SOFTPLUS_MUL; about 150 calls per token in Qwen3.6) would save about
+  0.5 ms per token (1-2%). Not started.
 - Meteor Lake: IQ2_XS / IQ3_XXS MMVQ not measured (off by default there, `GGML_VK_FORCE_MMVQ=1`). IQ2_XXS is on:
   Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 (fp16 for IQ2_XXS) vs 19.70 t/s (MMVQ forced), 4 alternating rounds, f32e39e.
 
