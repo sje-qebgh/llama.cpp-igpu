@@ -421,6 +421,49 @@ tg128, median of 3 alternating rounds, ratio to the default:
 Submit batching stays as upstream: fewer submits save about 0.8 ms per token for Qwen3.6 in the host timings, but
 1% in t/s is within the noise. Fewer ops (fusion) is what helps.
 
+### Ternary Q2_0 on Lunar Lake (Ternary Bonsai 2.5 27B)
+
+Ternary-Bonsai-2.5-27B-Q2_0 (`qwen35` 27B, dense, 7.14 GiB, weights with a folded Prism Hadamard rotation; needs
+upstream b11556 or later). Driver 32.0.101.9028, build 0858d37, `q2_0-probe.ps1`: tg128 `-p 0`, 5 alternating rounds,
+median (min-max). All settings pass `test-backend-ops -o MUL_MAT` for q2_0 (75/75). Greedy text on Vulkan matches the
+CPU for the first ~25 tokens.
+
+| Setting | tg128 t/s | ratio |
+|---|---|---|
+| default (MMVQ, 2 rows, one subgroup) | 11.67 (11.64-11.70) | 1.000x |
+| fp16 path (`GGML_VK_DISABLE_MMVQ=1`) | 10.06 (9.85-10.76) | 0.862x |
+| `GGML_VK_MMVQ_ROWS=q2_0=4` | 11.43 (11.42-11.45) | 0.979x |
+| `GGML_VK_MMVQ_WG=q2_0=large` | 10.25 (10.22-10.26) | 0.878x |
+| large, 4 rows | 11.47 (11.45-11.52) | 0.983x |
+| `GGML_VK_MMVQ_LANES=q2_0=8`, 4 rows | 11.38 (9.96-11.40) | 0.975x |
+
+The default is the fastest, so nothing changes for Q2_0. Profile (`GGML_VK_PERF_LOGGER=1`, tg16, about 87.5 ms per
+token): the Q2_0 mat-vecs take 76 ms (87%) at 95 GB/s on average, 69% of the theoretical 136.5 GB/s, more than any
+model in the bandwidth table below (51-61%). gate/up/down (25 MB per call) reach 97-99 GB/s, the output layer
+(358 MB) 104 GB/s. Only `MUL_MAT_ADD` m=5120 k=6144 is lower, 70 GB/s against 92 GB/s for the same shape without
+the add (could be the logger, its `MUL_MAT_ADD` lines are not always right). The Hadamard rotation of the inputs
+runs as f32 mat-muls with a 1024x1024 matrix, 0.8 ms per token. Meteor Lake is not measured (Q2_0 is not in its
+MMVQ list, so it runs the fp16 path).
+
+MTP: `Ternary-Bonsai-2.5-27B-Q2_0-mtp.gguf` loads and drafts with `--spec-type draft-mtp`. llama-server, one request
+with a 4559-token prompt, `-ngl 99 -fa on -c 8192 -np 1 --spec-draft-n-min 0 --spec-draft-n-max 7 --spec-draft-p-min 0.6`,
+one run each:
+
+| Run | tokens generated | t/s | draft acceptance | mean len |
+|---|---|---|---|---|
+| no MTP (tg128 above, depth 0) | - | 11.67 | - | - |
+| MTP, default sampling | 3301 | 16.56 | 0.741 | 4.10 |
+| MTP, `--temp 1.0 --top-k 20 --top-p 0.95 --presence-penalty 1.0` | 1331 | 21.91 (1.88x) | 0.793 | 4.87 |
+| same, `-ctk q8_0 -ctv q8_0` | 2930 | 18.16 | 0.748 | 4.03 |
+
+- With the default sampling the model repeated "Wait, ..." corrections and wrote 2.5x more tokens; with Prism's
+  sampling settings (temperature 1, top-k 20, top-p 0.95) plus a presence penalty it did not.
+- The outputs differ between runs (temperature 1), so t/s follows the mean draft length. One draft + verify step
+  takes about 222 ms in both the f16 and the q8_0 run; at this length (up to 7.5k tokens) a q8_0 cache shows no
+  speed cost. Prompt processing: 161 t/s (f16), 169 t/s (q8_0).
+- `--spec-draft-n-max 7`: the Vulkan mat-vec takes up to 8 columns, so 7 drafts + 1 stay on the MMVQ path
+  (8 not measured).
+
 ### Long context prefill on Meteor Lake (flash attention)
 
 Qwen3.6-35B-A3B UD-IQ3_S, pp512 at depth (`-d`), default `-ub 512`, 2 alternating runs (mean), build c271846 with a
@@ -589,6 +632,10 @@ measuring a baseline.
   token generation f16 29.0 / q8_0 27.2 t/s (before: 167 and 23.2). Meteor Lake (no Intel flash attention kernels
   there): see above, `-fa 0` with an f16 cache is usually the faster choice. f16 is still slightly faster on Lunar Lake; with few
   attention layers (Qwen3.6: 10 of 40) the f16 cache is small, e.g. about 670 MB at 32k context.
+- Ternary Bonsai 2.5 27B (Q2_0): use the `-mtp` file with `--spec-type draft-mtp --spec-draft-n-min 0
+  --spec-draft-n-max 7 --spec-draft-p-min 0.6` and Prism's sampling, `--temp 1.0 --top-k 20 --top-p 0.95`, plus
+  `--presence-penalty 1.0`. Lunar Lake 21.9 t/s against 11.7 without MTP (see "Ternary Q2_0 on Lunar Lake").
+  The f16 cache is about 64 KB per token (16 attention layers), 2 GB at 32k context.
 
 ## Correctness
 
@@ -623,6 +670,7 @@ not used there. Set `GGML_VK_DISABLE_COOPMAT=1` to exercise them anyway.
   see "Lunar Lake: upstream vs this fork"). Either upstream fixes it, or MUL_MAT_ID takes the per-expert scale here.
 - Meteor Lake: IQ2_XS / IQ3_XXS MMVQ not measured (off by default there, `GGML_VK_FORCE_MMVQ=1`). IQ2_XXS is on:
   Qwen3.6-35B-A3B UD-IQ2_XXS tg128 18.55 (fp16 for IQ2_XXS) vs 19.70 t/s (MMVQ forced), 4 alternating rounds, f32e39e.
+- Meteor Lake: Q2_0 MMVQ not measured (fp16 path by default; `q2_0-probe.ps1` compares it with `GGML_VK_FORCE_MMVQ=1`).
 
 ### Not planned
 
